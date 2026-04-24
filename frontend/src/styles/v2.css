@@ -1,0 +1,216 @@
+/* V2 UI Styles - iOS Liquid Glass Design */
+
+/* Apply smooth transitions when switching versions */
+body {
+  transition: background 0.3s ease;
+}
+
+/* V2 specific styles - iOS Liquid Glass */
+body.ui-v2 {
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  min-height: 100vh;
+}
+
+body.ui-v2.dark {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+}
+
+body.ui-v2::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: 
+    radial-gradient(circle at 20% 80%, rgba(59, 130, 246, 0.15) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
+    radial-gradient(circle at 40% 40%, rgba(236, 72, 153, 0.1) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* iOS Liquid Glass Cards - Frosted Glass Effect */
+.ui-v2 .card,
+.ui-v2 [class*="Card"] {
+  background: rgba(255, 255, 255, 0.7) !important;
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  box-shadow: 
+    0 8px 32px 0 rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.5) !important;
+  border-radius: 20px !important;
+}
+
+body.ui-v2.dark .card,
+body.ui-v2.dark [class*="Card"] {
+  background: rgba(30, 30, 46, 0.7) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 
+    0 8px 32px 0 rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.1) !important;
+}
+
+.ui-v2 .card:hover,
+.ui-v2 [class*="Card"]:hover {
+  background: rgba(255, 255, 255, 0.8) !important;
+  transform: translateY(-2px);
+  box-shadow: 
+    0 12px 40px 0 rgba(0, 0, 0, 0.15),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.6) !important;
+}
+
+body.ui-v2.dark .card:hover,
+body.ui-v2.dark [class*="Card"]:hover {
+  background: rgba(30, 30, 46, 0.8) !important;
+}
+
+/* iOS-style buttons */
+.ui-v2 button,
+.ui-v2 [role="button"] {
+  backdrop-filter: blur(10px) saturate(180%);
+  -webkit-backdrop-filter: blur(10px) saturate(180%);
+  border-radius: 12px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* iOS-style header/navbar */
+.ui-v2 header,
+.ui-v2 [class*="header"] {
+  background: rgba(255, 255, 255, 0.8) !important;
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.1) !important;
+}
+
+body.ui-v2.dark header,
+body.ui-v2.dark [class*="header"] {
+  background: rgba(30, 30, 46, 0.8) !important;
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+/* iOS-style sidebar */
+.ui-v2 aside,
+.ui-v2 [class*="sidebar"] {
+  background: rgba(255, 255, 255, 0.75) !important;
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+  border-right: 0.5px solid rgba(0, 0, 0, 0.1) !important;
+}
+
+body.ui-v2.dark aside,
+body.ui-v2.dark [class*="sidebar"] {
+  background: rgba(30, 30, 46, 0.75) !important;
+  border-right: 0.5px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+/* iOS-style inputs */
+.ui-v2 input,
+.ui-v2 textarea,
+.ui-v2 select {
+  background: rgba(255, 255, 255, 0.6) !important;
+  backdrop-filter: blur(10px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(10px) saturate(180%) !important;
+  border: 0.5px solid rgba(0, 0, 0, 0.1) !important;
+  border-radius: 12px !important;
+}
+
+body.ui-v2.dark input,
+body.ui-v2.dark textarea,
+body.ui-v2.dark select {
+  background: rgba(30, 30, 46, 0.6) !important;
+  border: 0.5px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Smooth animations */
+.ui-v2 * {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Gradient text in v2 */
+.ui-v2 .gradient-text {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glow effects */
+.ui-v2 .glow {
+  box-shadow: 
+    0 0 20px rgba(139, 92, 246, 0.5),
+    0 0 40px rgba(139, 92, 246, 0.3),
+    0 0 60px rgba(139, 92, 246, 0.1);
+}
+
+/* Animated gradients */
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.ui-v2 .animated-gradient {
+  background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+  background-size: 400% 400%;
+  animation: gradient-shift 15s ease infinite;
+}
+
+/* Floating animation */
+@keyframes float {
+  0% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-20px);
+  }
+  100% {
+    transform: translateY(0px);
+  }
+}
+
+.ui-v2 .floating {
+  animation: float 6s ease-in-out infinite;
+}
+
+/* Pulse animation for important elements */
+@keyframes pulse-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(139, 92, 246, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0);
+  }
+}
+
+.ui-v2 .pulse {
+  animation: pulse-glow 2s infinite;
+}
+
+/* Smooth scrollbar for v2 */
+.ui-v2::-webkit-scrollbar {
+  width: 10px;
+}
+
+.ui-v2::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.ui-v2::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 5px;
+}
+
+.ui-v2::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+}

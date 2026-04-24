@@ -1,0 +1,96 @@
+{
+  "accounts": [
+    {
+      "id": "acc_1_sample",
+      "name": "Zerodha",
+      "type": "mutual_fund"
+    },
+    {
+      "id": "acc_2_sample",
+      "name": "Groww",
+      "type": "stock"
+    }
+  ],
+  "funds": [
+    {
+      "id": "fund_1_sample",
+      "name": "HDFC Top 100 Fund",
+      "type": "mutual_fund",
+      "account_id": "acc_1_sample",
+      "transactions": [
+        {
+          "id": "txn_1_sample",
+          "date": "2024-01-15",
+          "units": 100,
+          "nav": 150.5,
+          "amount": 15050,
+          "transaction_type": "buy"
+        },
+        {
+          "id": "txn_2_sample",
+          "date": "2024-03-20",
+          "units": 50,
+          "nav": 155.75,
+          "amount": 7787.5,
+          "transaction_type": "buy"
+        },
+        {
+          "id": "txn_3_sample",
+          "date": "2024-06-10",
+          "units": 75,
+          "nav": 162.3,
+          "amount": 12172.5,
+          "transaction_type": "buy"
+        }
+      ]
+    },
+    {
+      "id": "fund_2_sample",
+      "name": "SBI Bluechip Fund",
+      "type": "mutual_fund",
+      "account_id": "acc_1_sample",
+      "transactions": [
+        {
+          "id": "txn_4_sample",
+          "date": "2024-02-01",
+          "units": 200,
+          "nav": 85.25,
+          "amount": 17050,
+          "transaction_type": "buy"
+        },
+        {
+          "id": "txn_5_sample",
+          "date": "2024-05-15",
+          "units": 100,
+          "nav": 88.5,
+          "amount": 8850,
+          "transaction_type": "buy"
+        }
+      ]
+    },
+    {
+      "id": "fund_3_sample",
+      "name": "Reliance Industries",
+      "type": "stock",
+      "account_id": "acc_2_sample",
+      "transactions": [
+        {
+          "id": "txn_6_sample",
+          "date": "2024-01-10",
+          "units": 50,
+          "nav": 2450.75,
+          "amount": 122537.5,
+          "transaction_type": "buy"
+        },
+        {
+          "id": "txn_7_sample",
+          "date": "2024-04-05",
+          "units": 25,
+          "nav": 2580.25,
+          "amount": 64506.25,
+          "transaction_type": "buy"
+        }
+      ]
+    }
+  ]
+}
