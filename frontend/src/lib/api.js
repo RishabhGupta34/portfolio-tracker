@@ -101,6 +101,20 @@ const portfolioApi = {
     const result = await localApi.deleteFund(fundId);
     return wrapResponse(result);
   },
+
+  // Update fund
+  async updateFund(fundId, data) {
+    await ensureInitialized();
+    const result = await localApi.updateFund(fundId, data);
+    return wrapResponse(result);
+  },
+
+  // Manual NAV (for private shares, gold, etc.)
+  async setManualNav(fundId, value) {
+    await ensureInitialized();
+    const result = await localApi.setManualNav(fundId, value);
+    return wrapResponse(result);
+  },
   
   // Portfolio metrics
   async getPortfolioMetrics() {
@@ -150,7 +164,13 @@ const portfolioApi = {
     const result = await localApi.calculateFDMaturity(fundId);
     return wrapResponse(result);
   },
-  
+
+  async breakFd(fundId, params) {
+    await ensureInitialized();
+    const result = await localApi.breakFd(fundId, params);
+    return wrapResponse(result);
+  },
+
   async getBanks() {
     await ensureInitialized();
     const result = await localApi.getBanks();

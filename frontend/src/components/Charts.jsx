@@ -7,6 +7,12 @@ import { TrendingUp, PieChart as PieChartIcon, BarChart3, Filter, Eye, EyeOff, T
 import { AnimatedCard } from './ui/AnimatedCard';
 import { getBenchmarkPrice, calculateBenchmarkTimeline, getAvailableBenchmarks } from '../lib/benchmark';
 import { matchesTypeFilter, isGoldFund } from '../lib/fundUtils';
+import { CadenceChart } from './CadenceChart';
+import { CategoryXIRR } from './CategoryXIRR';
+import { HoldingsTreemap } from './HoldingsTreemap';
+import { DrawdownChart } from './DrawdownChart';
+import { RollingReturns } from './RollingReturns';
+import { MonthlyReturnsHeatmap } from './MonthlyReturnsHeatmap';
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
 
@@ -280,8 +286,11 @@ export function Charts() {
     const typeNames = {
       'mutual_fund': 'Mutual Funds',
       'stock': 'Stocks',
+      'private_share': 'Private Shares',
+      'esop': 'ESOP / RSU',
       'fd': 'Fixed Deposits',
       'ppf': 'PPF',
+      'epf': 'EPF',
       'gold': 'Gold/Silver',
       'other': 'Other'
     };
@@ -699,7 +708,7 @@ export function Charts() {
 
       {/* Portfolio Value Over Time */}
       {timeline.length > 0 && (
-        <Card>
+        <Card data-report-capture="performance">
           <CardHeader>
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div className="flex items-center gap-2">
@@ -847,6 +856,52 @@ export function Charts() {
         </Card>
       )}
 
+      {/* Drawdown — peak-to-trough drops */}
+      {filteredTimeline.length > 1 && (
+        <DrawdownChart timeline={filteredTimeline} hideValues={hideValues} />
+      )}
+
+      {/* Rolling returns over multiple windows */}
+      {filteredTimeline.length >= 30 && (
+        <RollingReturns timeline={filteredTimeline} />
+      )}
+
+      {/* Monthly returns calendar heatmap */}
+      {filteredTimeline.length > 1 && (
+        <MonthlyReturnsHeatmap timeline={filteredTimeline} />
+      )}
+
+      {/* Investment Cadence (monthly net buys/sells) — exclude deposits (fixed-return) */}
+      <CadenceChart
+        funds={funds.filter((f) => {
+          if (['fd', 'ppf', 'epf'].includes(f.type)) return false;
+          if (selectedAccounts.length > 0 && !selectedAccounts.includes(f.account_id)) return false;
+          if (selectedTypes.length > 0 && !selectedTypes.some((t) => matchesTypeFilter(f, t))) return false;
+          return true;
+        })}
+        hideValues={hideValues}
+      />
+
+      {/* Category XIRR breakdown — exclude deposits */}
+      <CategoryXIRR
+        funds={funds.filter((f) => {
+          if (['fd', 'ppf', 'epf'].includes(f.type)) return false;
+          if (selectedAccounts.length > 0 && !selectedAccounts.includes(f.account_id)) return false;
+          if (selectedTypes.length > 0 && !selectedTypes.some((t) => matchesTypeFilter(f, t))) return false;
+          return true;
+        })}
+      />
+
+      {/* Holdings Treemap (asset → fund) — exclude deposits */}
+      <HoldingsTreemap
+        funds={funds.filter((f) => {
+          if (['fd', 'ppf', 'epf'].includes(f.type)) return false;
+          if (selectedAccounts.length > 0 && !selectedAccounts.includes(f.account_id)) return false;
+          if (selectedTypes.length > 0 && !selectedTypes.some((t) => matchesTypeFilter(f, t))) return false;
+          return true;
+        })}
+      />
+
       <div className="grid gap-6 md:grid-cols-2">
         {/* Account Allocation Pie Chart */}
         {filteredData.allocation.length > 0 && (
@@ -911,35 +966,9 @@ export function Charts() {
                 <BarChart3 className="h-5 w-5 text-primary" />
                 <CardTitle>Top Performers (Returns %)</CardTitle>
               </div>
-          </CardHeader>
-          <CardContent className="pb-4">
-            {/* Benchmark Toggle */}
-            <div className="flex items-center gap-4 mb-4">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={showBenchmark}
-                  onChange={(e) => setShowBenchmark(e.target.checked)}
-                  className="w-4 h-4 rounded border-gray-300"
-                />
-                <span className="text-sm font-medium">Show Benchmark</span>
-              </label>
-              {showBenchmark && (
-                <select
-                  value={selectedBenchmark}
-                  onChange={(e) => setSelectedBenchmark(e.target.value)}
-                  className="px-3 py-1.5 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
-                >
-                  {getAvailableBenchmarks().map(benchmark => (
-                    <option key={benchmark} value={benchmark}>{benchmark}</option>
-                  ))}
-                </select>
-              )}
-              {benchmarkLoading && (
-                <span className="text-xs text-muted-foreground">Loading benchmark...</span>
-              )}
-            </div>
-            <ResponsiveContainer width="100%" height={400}>
+            </CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={400}>
                 <BarChart data={filteredData.performance.slice(0, 5)} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis type="number" />
@@ -1021,7 +1050,7 @@ export function Charts() {
                     </div>
                     <div className="text-right">
                       <div className="font-medium">{displayValue(item.value)}</div>
-                      <div className={`text-xs ${item.returns >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <div className={`text-xs ${item.returns >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                         {displayValue(item.returns)}
                       </div>
                     </div>
@@ -1045,7 +1074,7 @@ export function Charts() {
               <div className="space-y-4">
                 {topPerformers.top.length > 0 && (
                   <div>
-                    <h4 className="text-sm font-semibold text-green-600 mb-2">🏆 Top Performers</h4>
+                    <h4 className="text-sm font-semibold text-emerald-600 dark:text-emerald-400 mb-2">🏆 Top Performers</h4>
                     <div className="space-y-2">
                       {topPerformers.top.map((fund, index) => (
                         <div key={index} className="flex justify-between items-center text-sm p-2 bg-green-100 dark:bg-green-900/30 rounded">
@@ -1058,7 +1087,7 @@ export function Charts() {
                 )}
                 {topPerformers.worst.length > 0 && (
                   <div>
-                    <h4 className="text-sm font-semibold text-red-600 mb-2">📉 Needs Attention</h4>
+                    <h4 className="text-sm font-semibold text-red-600 dark:text-red-400 mb-2">📉 Needs Attention</h4>
                     <div className="space-y-2">
                       {topPerformers.worst.map((fund, index) => (
                         <div key={index} className="flex justify-between items-center text-sm p-2 bg-red-100 dark:bg-red-900/30 rounded">
@@ -1074,52 +1103,6 @@ export function Charts() {
           </Card>
         )}
       </div>
-
-      {/* Detailed Performance Table */}
-      {filteredData.performance.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Detailed Fund Performance</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left p-3 font-medium">Fund Name</th>
-                    <th className="text-right p-3 font-medium">Invested</th>
-                    <th className="text-right p-3 font-medium">Current Value</th>
-                    <th className="text-right p-3 font-medium">Returns</th>
-                    <th className="text-right p-3 font-medium">Returns %</th>
-                    <th className="text-right p-3 font-medium">XIRR</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredData.performance.map((fund, index) => {
-                    const isPositive = fund.returns >= 0;
-                    return (
-                      <tr key={index} className="border-b hover:bg-muted/50">
-                        <td className="p-3">{fund.name}</td>
-                        <td className="text-right p-3">{formatCurrency(fund.invested)}</td>
-                        <td className="text-right p-3">{formatCurrency(fund.current_value)}</td>
-                        <td className={`text-right p-3 ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
-                          {formatCurrency(fund.returns)}
-                        </td>
-                        <td className={`text-right p-3 font-medium ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
-                          {fund.returns_pct.toFixed(2)}%
-                        </td>
-                        <td className="text-right p-3">
-                          {fund.xirr !== null ? `${fund.xirr.toFixed(2)}%` : 'N/A'}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {timeline.length === 0 && allocation.length === 0 && performance.length === 0 && (
         <Card>

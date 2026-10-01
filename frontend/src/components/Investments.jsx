@@ -8,6 +8,8 @@ import { Modal } from './ui/Modal';
 import { toast } from './ui/Toast';
 import { Plus, TrendingUp, Trash2, RefreshCw, Search, ChevronDown, ChevronUp, Edit, Calculator, Eye, EyeOff, Copy, Wallet } from 'lucide-react';
 import { formatCurrency, formatNumber, formatDate } from '../lib/utils';
+import { EsopFields, prepareEsopTxnForApi } from './EsopFields';
+import { summarizeEsopFund } from '../lib/esop';
 
 export function Investments() {
   const [funds, setFunds] = useState([]);
@@ -27,6 +29,12 @@ export function Investments() {
     account_id: '',
     scheme_code: '',
     symbol: '',
+    // ESOP / RSU grant-level (used only when type === 'esop')
+    esop_grant_type: 'rsu',      // 'rsu' | 'esop'
+    esop_company: '',
+    esop_currency: 'USD',
+    esop_grant_date: '',
+    esop_vesting_schedule: '',
   });
 
   const [searchResults, setSearchResults] = useState([]);
@@ -55,6 +63,12 @@ export function Investments() {
     units: '',
     nav: '',
     transaction_type: 'buy',
+    // ESOP / RSU grant-level (used when fund_type === 'esop' && is_new_fund)
+    esop_grant_type: 'rsu',
+    esop_company: '',
+    esop_currency: 'USD',
+    // Per-transaction ESOP fields (used for both new and existing ESOP funds)
+    esop: null,
   });
 
   const [transactionFormData, setTransactionFormData] = useState({
@@ -64,6 +78,7 @@ export function Investments() {
     transaction_type: 'buy',
     split_ratio: '',
     notes: '',
+    esop: null,  // populated for ESOP funds via <EsopFields />
   });
 
   useEffect(() => {
@@ -246,10 +261,11 @@ export function Investments() {
 
   const handleRecordTransaction = async (e) => {
     e.preventDefault();
-    
+
     try {
       let fundId = recordTxnData.fund_id;
-      
+      const isEsop = recordTxnData.fund_type === 'esop';
+
       // Step 1: Create fund if new
       if (recordTxnData.is_new_fund) {
         const fundData = {
@@ -258,12 +274,17 @@ export function Investments() {
           account_id: recordTxnData.account_id,
           scheme_code: recordTxnData.scheme_code || null,
           symbol: recordTxnData.symbol || null,
+          ...(isEsop && {
+            esop_grant_type: recordTxnData.esop_grant_type,
+            esop_company: recordTxnData.esop_company || null,
+            esop_currency: recordTxnData.esop_currency,
+          }),
         };
-        
+
         const fundResponse = await portfolioApi.createFund(fundData);
         fundId = fundResponse.data.id;
         toast.success('Investment created!');
-        
+
         // Auto-fetch NAV for mutual funds and stocks
         if (fundData.scheme_code || fundData.symbol) {
           try {
@@ -273,16 +294,41 @@ export function Investments() {
           }
         }
       }
-      
+
+      // ESOP path: convert original-currency inputs to INR before sending
+      const units = parseFloat(recordTxnData.units);
+      let extraEsopFields = {};
+      let navToSend = parseFloat(recordTxnData.nav);
+      if (isEsop && recordTxnData.transaction_type === 'buy' && recordTxnData.esop) {
+        const prepared = prepareEsopTxnForApi(units, recordTxnData.esop);
+        if (prepared.error) {
+          toast.error(prepared.error);
+          return;
+        }
+        navToSend = prepared.nav;
+        extraEsopFields = {
+          strike_price: prepared.strike_price,
+          fmv: prepared.fmv,
+          perquisite_tax: prepared.perquisite_tax,
+          original_currency: prepared.original_currency,
+          original_nav: prepared.original_nav,
+          original_strike_price: prepared.original_strike_price,
+          original_fmv: prepared.original_fmv,
+          fx_rate: prepared.fx_rate,
+          fx_rate_source: prepared.fx_rate_source,
+        };
+      }
+
       // Step 2: Add transaction
       const txnData = {
         fund_id: fundId,
         date: recordTxnData.date,
-        units: parseFloat(recordTxnData.units),
-        nav: parseFloat(recordTxnData.nav),
+        units,
+        nav: navToSend,
         transaction_type: recordTxnData.transaction_type,
+        ...extraEsopFields,
       };
-      
+
       await portfolioApi.addTransaction(txnData);
       toast.success('Transaction recorded successfully!');
       
@@ -304,6 +350,10 @@ export function Investments() {
         units: '',
         nav: '',
         transaction_type: 'buy',
+        esop_grant_type: 'rsu',
+        esop_company: '',
+        esop_currency: 'USD',
+        esop: null,
       });
       setSearchResults([]);
       setPreviewNav(null);
@@ -315,6 +365,7 @@ export function Investments() {
   };
 
   const selectExistingFundForTransaction = async (fund) => {
+    const isEsop = fund.type === 'esop';
     setRecordTxnData({
       ...recordTxnData,
       fund_id: fund.id,
@@ -323,6 +374,17 @@ export function Investments() {
       fund_type: fund.type,
       scheme_code: fund.scheme_code || '',
       symbol: fund.symbol || '',
+      esop_grant_type: fund.esop_grant_type || recordTxnData.esop_grant_type,
+      esop_company: fund.esop_company || recordTxnData.esop_company,
+      esop_currency: fund.esop_currency || recordTxnData.esop_currency,
+      esop: isEsop ? {
+        original_currency: fund.esop_currency || 'USD',
+        original_strike_price: fund.esop_grant_type === 'rsu' ? 0 : null,
+        original_fmv: null,
+        fx_rate: null,
+        fx_rate_source: null,
+        perquisite_tax: null,
+      } : null,
     });
     
     // Auto-fetch current NAV/price
@@ -392,6 +454,14 @@ export function Investments() {
         scheme_code: fundFormData.scheme_code ? String(fundFormData.scheme_code) : null,
         symbol: fundFormData.symbol || null,
       };
+      // Strip ESOP grant fields when not an ESOP fund (keeps payload clean)
+      if (fundData.type !== 'esop') {
+        delete fundData.esop_grant_type;
+        delete fundData.esop_company;
+        delete fundData.esop_currency;
+        delete fundData.esop_grant_date;
+        delete fundData.esop_vesting_schedule;
+      }
       console.log('Creating fund with data:', fundData);
       const response = await portfolioApi.createFund(fundData);
       console.log('Fund created successfully:', response.data);
@@ -414,7 +484,11 @@ export function Investments() {
       }
       
       setIsAddFundModalOpen(false);
-      setFundFormData({ name: '', type: 'mutual_fund', account_id: '', scheme_code: '', symbol: '' });
+      setFundFormData({
+        name: '', type: 'mutual_fund', account_id: '', scheme_code: '', symbol: '',
+        esop_grant_type: 'rsu', esop_company: '', esop_currency: 'USD',
+        esop_grant_date: '', esop_vesting_schedule: '',
+      });
       setSearchResults([]);
       loadData();
     } catch (error) {
@@ -509,11 +583,44 @@ export function Investments() {
     }
   };
 
-  const handleDeleteFund = async (fundId, fundName) => {
-    if (!window.confirm(`Are you sure you want to delete "${fundName}"? This will delete all transactions for this investment.`)) {
+  const handleMarkPrivateValue = async (fund) => {
+    const current = fund.current_nav != null ? fund.current_nav : '';
+    const input = window.prompt(
+      `Set current value per share for "${fund.name}" (e.g., latest 409A or round price):`,
+      String(current)
+    );
+    if (input === null) return;
+    const value = parseFloat(input);
+    if (!Number.isFinite(value) || value < 0) {
+      toast.error('Please enter a valid non-negative number');
       return;
     }
-    
+    try {
+      await portfolioApi.setManualNav(fund.id, value);
+      toast.success(`Marked at ₹${value} per share`);
+      loadData();
+    } catch (error) {
+      console.error('Error marking private value:', error);
+      toast.error('Failed to update value');
+    }
+  };
+
+  const handleDeleteFund = async (fundId, fundName) => {
+    const targetFund = funds.find((f) => f.id === fundId);
+    const sellCount = (targetFund?.transactions || []).filter((t) => t.transaction_type === 'sell').length;
+
+    let message = `Are you sure you want to delete "${fundName}"? This will delete all transactions for this investment.`;
+    if (sellCount > 0) {
+      message = `"${fundName}" has ${sellCount} sell transaction(s). Deleting it will also REMOVE this fund's realized gains history. Type the fund name to confirm.`;
+      const typed = window.prompt(message);
+      if (typed !== fundName) {
+        if (typed !== null) toast.error('Name did not match — cancelled');
+        return;
+      }
+    } else if (!window.confirm(message)) {
+      return;
+    }
+
     try {
       await portfolioApi.deleteFund(fundId);
       toast.success('Investment deleted successfully');
@@ -526,6 +633,7 @@ export function Investments() {
 
   const openAddTransactionModal = (fund) => {
     setSelectedFund(fund);
+    const isEsop = fund?.type === 'esop';
     setTransactionFormData({
       date: new Date().toISOString().split('T')[0],
       units: '',
@@ -533,6 +641,14 @@ export function Investments() {
       transaction_type: 'buy',
       split_ratio: '',
       notes: '',
+      esop: isEsop ? {
+        original_currency: fund.esop_currency || 'USD',
+        original_strike_price: fund.esop_grant_type === 'rsu' ? 0 : null,
+        original_fmv: null,
+        fx_rate: null,
+        fx_rate_source: null,
+        perquisite_tax: null,
+      } : null,
     });
     setIsAddTransactionModalOpen(true);
   };
@@ -563,18 +679,46 @@ export function Investments() {
 
   const handleAddTransaction = async (e) => {
     e.preventDefault();
-    
+
     try {
+      const isEsop = selectedFund?.type === 'esop';
+      const units = parseFloat(transactionFormData.units);
+
+      let extraEsopFields = {};
+      let navOverride = null;
+      if (isEsop && transactionFormData.transaction_type === 'buy') {
+        const prepared = prepareEsopTxnForApi(units, transactionFormData.esop);
+        if (prepared.error) {
+          toast.error(prepared.error);
+          return;
+        }
+        navOverride = prepared.nav;
+        extraEsopFields = {
+          strike_price: prepared.strike_price,
+          fmv: prepared.fmv,
+          perquisite_tax: prepared.perquisite_tax,
+          original_currency: prepared.original_currency,
+          original_nav: prepared.original_nav,
+          original_strike_price: prepared.original_strike_price,
+          original_fmv: prepared.original_fmv,
+          fx_rate: prepared.fx_rate,
+          fx_rate_source: prepared.fx_rate_source,
+        };
+      }
+
       const txnData = {
         fund_id: selectedFund.id,
         date: transactionFormData.date,
-        units: parseFloat(transactionFormData.units),
-        nav: transactionFormData.transaction_type === 'split' ? 0 : parseFloat(transactionFormData.nav),
+        units,
+        nav: transactionFormData.transaction_type === 'split'
+          ? 0
+          : (navOverride != null ? navOverride : parseFloat(transactionFormData.nav)),
         transaction_type: transactionFormData.transaction_type,
         split_ratio: transactionFormData.split_ratio || null,
         notes: transactionFormData.notes || null,
+        ...extraEsopFields,
       };
-      
+
       await portfolioApi.addTransaction(txnData);
       toast.success('Transaction added successfully!');
       setIsAddTransactionModalOpen(false);
@@ -585,6 +729,7 @@ export function Investments() {
         transaction_type: 'buy',
         split_ratio: '',
         notes: '',
+        esop: null,
       });
       loadData();
     } catch (error) {
@@ -743,6 +888,8 @@ export function Investments() {
               <option value="all">📊 All Types</option>
               <option value="mutual_fund">📈 Mutual Funds</option>
               <option value="stock">💹 Stocks</option>
+              <option value="private_share">🔒 Private Shares</option>
+              <option value="esop">🎟️ ESOP / RSU</option>
               <option value="gold">🪙 Gold/Silver</option>
               <option value="other">📦 Other</option>
             </select>
@@ -914,6 +1061,17 @@ export function Investments() {
                                 >
                                   <Plus className="h-4 w-4" />
                                 </Button>
+                                {(account.type === 'private_share' || account.type === 'esop' || account.type === 'gold' || account.type === 'other') && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    onClick={() => handleMarkPrivateValue(account)}
+                                    title="Mark current value per unit"
+                                    className="h-8 w-8 text-blue-600 hover:bg-blue-100"
+                                  >
+                                    <Calculator className="h-4 w-4" />
+                                  </Button>
+                                )}
                                 <Button
                                   size="icon"
                                   variant="ghost"
@@ -952,19 +1110,60 @@ export function Investments() {
                                 </div>
                               </div>
                             </div>
-                            
+
+                            {account.type === 'esop' && (() => {
+                              const summary = summarizeEsopFund(account);
+                              if (!summary || summary.totalUnits === 0) return null;
+                              return (
+                                <div className="mb-4 p-3 rounded-lg border-2 border-dashed border-purple-300/60 bg-purple-50/30 dark:bg-purple-950/10">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="text-xs font-semibold text-purple-700 dark:text-purple-300 uppercase tracking-wide">
+                                      {summary.grantType === 'rsu' ? 'RSU' : 'ESOP'}
+                                      {summary.company ? ` · ${summary.company}` : ''}
+                                      {summary.currency !== 'INR' ? ` · ${summary.currency}` : ''}
+                                    </div>
+                                  </div>
+                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                                    {summary.totalStrikePaid > 0 && (
+                                      <div>
+                                        <div className="text-muted-foreground">Strike Paid</div>
+                                        <div className="font-semibold">{displayValue(summary.totalStrikePaid)}</div>
+                                      </div>
+                                    )}
+                                    <div>
+                                      <div className="text-muted-foreground">Tax Paid</div>
+                                      <div className="font-semibold">{displayValue(summary.totalTaxPaid)}</div>
+                                    </div>
+                                    <div>
+                                      <div className="text-muted-foreground">FMV at Vest</div>
+                                      <div className="font-semibold">{displayValue(summary.totalFmvAtVest)}</div>
+                                    </div>
+                                    <div>
+                                      <div className="text-muted-foreground">Since-Vest Δ</div>
+                                      <div className={`font-semibold ${summary.appreciationSinceVest >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {hideValues ? '••' : `${summary.appreciationSinceVest >= 0 ? '+' : ''}${formatCurrency(summary.appreciationSinceVest)} (${summary.appreciationPct >= 0 ? '+' : ''}${formatNumber(summary.appreciationPct, 1)}%)`}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+
                             {account.transactions.length > 0 && (
                               <div className="space-y-1">
-                                {account.transactions.map((txn) => (
-                                  <div key={txn.id} className="flex items-center justify-between p-2 rounded hover:bg-background/70 text-xs">
-                                    <div className="flex items-center gap-3 flex-1">
+                                {account.transactions.map((txn) => {
+                                  const isEsopBuy = account.type === 'esop' && (txn.transaction_type === 'buy' || txn.transaction_type === 'bonus');
+                                  return (
+                                  <div key={txn.id} className="flex flex-col p-2 rounded hover:bg-background/70 text-xs">
+                                    <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-3 flex-1 flex-wrap">
                                       <span className="text-muted-foreground whitespace-nowrap">{formatDate(txn.date)}</span>
                                       <span className={`px-2 py-0.5 rounded font-medium ${
                                         txn.transaction_type === 'buy' 
                                           ? 'bg-green-100 text-green-800' 
                                           : 'bg-red-100 text-red-800'
                                       }`}>
-                                        {txn.transaction_type.toUpperCase()}
+                                        {isEsopBuy ? 'VEST' : txn.transaction_type.toUpperCase()}
                                       </span>
                                       <span className="font-medium">{hideValues ? '••••' : formatNumber(txn.units, 4)} units</span>
                                       <span className="text-muted-foreground">@ ₹{hideValues ? '••' : formatNumber(txn.nav, 2)}</span>
@@ -999,8 +1198,28 @@ export function Investments() {
                                         <Trash2 className="h-3 w-3" />
                                       </Button>
                                     </div>
+                                    </div>
+                                    {isEsopBuy && (txn.strike_price !== undefined || txn.fmv !== undefined || txn.perquisite_tax) && (
+                                      <div className="flex items-center gap-3 mt-1 pl-2 text-[10px] text-muted-foreground flex-wrap">
+                                        {txn.original_currency && txn.original_currency !== 'INR' && txn.fx_rate ? (
+                                          <span className="px-1.5 py-0.5 rounded bg-muted/60">
+                                            {txn.original_currency} @ {formatNumber(txn.fx_rate, 2)}
+                                          </span>
+                                        ) : null}
+                                        {txn.strike_price !== undefined && txn.strike_price !== null && (
+                                          <span>Strike: ₹{formatNumber(txn.strike_price, 2)}</span>
+                                        )}
+                                        {txn.fmv !== undefined && txn.fmv !== null && (
+                                          <span>FMV: ₹{formatNumber(txn.fmv, 2)}</span>
+                                        )}
+                                        {txn.perquisite_tax > 0 && (
+                                          <span>Tax: {displayValue(txn.perquisite_tax)}</span>
+                                        )}
+                                      </div>
+                                    )}
                                   </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             )}
                           </div>
@@ -1070,6 +1289,8 @@ export function Investments() {
             >
               <option value="mutual_fund">Mutual Fund</option>
               <option value="stock">Stock</option>
+              <option value="private_share">Private Share (Unlisted)</option>
+              <option value="esop">ESOP / RSU</option>
               <option value="fd">Fixed Deposit (FD)</option>
               <option value="ppf">Public Provident Fund (PPF)</option>
               <option value="gold">Gold/Silver</option>
@@ -1153,6 +1374,110 @@ export function Investments() {
                   Symbol for auto NAV updates. Will try NSE (.NS) and BSE (.BO)
                 </p>
               </div>
+            </>
+          ) : fundFormData.type === 'private_share' ? (
+            <>
+              <div>
+                <label className="block text-sm font-medium mb-2">Company Name</label>
+                <Input
+                  value={fundFormData.name}
+                  onChange={(e) => setFundFormData({ ...fundFormData, name: e.target.value })}
+                  placeholder="e.g., Acme Pvt Ltd (Series B)"
+                  required
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Unlisted / pre-IPO holdings. Track buys via "Record Transaction" with
+                  cost-per-share. Use "Update value" later to mark to the latest 409A or round price.
+                </p>
+              </div>
+            </>
+          ) : fundFormData.type === 'esop' ? (
+            <>
+              <div>
+                <label className="block text-sm font-medium mb-2">Grant Type</label>
+                <div className="flex gap-2">
+                  {[
+                    { v: 'rsu', label: 'RSU', hint: 'No strike, taxed at vest' },
+                    { v: 'esop', label: 'ESOP / Stock Options', hint: 'Has a strike price' },
+                  ].map(opt => (
+                    <button
+                      key={opt.v}
+                      type="button"
+                      onClick={() => setFundFormData({ ...fundFormData, esop_grant_type: opt.v })}
+                      className={`flex-1 p-3 rounded-lg border-2 text-left transition-all ${
+                        fundFormData.esop_grant_type === opt.v
+                          ? 'border-primary bg-primary/5'
+                          : 'border-muted hover:border-muted-foreground/40'
+                      }`}
+                    >
+                      <div className="text-sm font-semibold">{opt.label}</div>
+                      <div className="text-[11px] text-muted-foreground">{opt.hint}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Grant / Plan Name *</label>
+                <Input
+                  value={fundFormData.name}
+                  onChange={(e) => setFundFormData({ ...fundFormData, name: e.target.value })}
+                  placeholder={fundFormData.esop_grant_type === 'rsu' ? 'e.g., Google RSU 2024' : 'e.g., Acme ESOP Grant 2024'}
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-sm font-medium mb-2">Company / Ticker</label>
+                  <Input
+                    value={fundFormData.esop_company}
+                    onChange={(e) => setFundFormData({ ...fundFormData, esop_company: e.target.value })}
+                    placeholder="e.g., GOOG"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">Default Currency</label>
+                  <select
+                    value={fundFormData.esop_currency}
+                    onChange={(e) => setFundFormData({ ...fundFormData, esop_currency: e.target.value })}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="INR">INR — Indian Rupee</option>
+                    <option value="USD">USD — US Dollar</option>
+                    <option value="EUR">EUR — Euro</option>
+                    <option value="GBP">GBP — British Pound</option>
+                    <option value="SGD">SGD — Singapore Dollar</option>
+                    <option value="AED">AED — UAE Dirham</option>
+                    <option value="AUD">AUD — Australian Dollar</option>
+                    <option value="CAD">CAD — Canadian Dollar</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-sm font-medium mb-2">Grant Date (optional)</label>
+                  <DateInput
+                    value={fundFormData.esop_grant_date}
+                    onChange={(e) => setFundFormData({ ...fundFormData, esop_grant_date: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">Vesting Schedule (optional)</label>
+                  <Input
+                    value={fundFormData.esop_vesting_schedule}
+                    onChange={(e) => setFundFormData({ ...fundFormData, esop_vesting_schedule: e.target.value })}
+                    placeholder="e.g., 25% after 1y, then quarterly"
+                  />
+                </div>
+              </div>
+
+              <p className="text-xs text-muted-foreground mt-1">
+                Track each vesting tranche as a "Buy" with units = vested shares.
+                You'll enter strike price, FMV at vest, and tax paid per tranche.
+                Foreign currencies (USD, etc.) auto-convert to INR using live FX rates.
+              </p>
             </>
           ) : (
             <>
@@ -1287,7 +1612,11 @@ export function Investments() {
           {transactionFormData.transaction_type !== 'split' && (
             <div>
               <label className="block text-sm font-medium mb-2">
-                {transactionFormData.transaction_type === 'bonus' ? 'Bonus Shares Received' : 'Units'}
+                {transactionFormData.transaction_type === 'bonus'
+                  ? 'Bonus Shares Received'
+                  : selectedFund?.type === 'esop'
+                  ? `Units Vested (${selectedFund.esop_grant_type === 'rsu' ? 'RSU' : 'ESOP'})`
+                  : 'Units'}
               </label>
               <Input
                 type="number"
@@ -1298,6 +1627,15 @@ export function Investments() {
                 required
               />
             </div>
+          )}
+
+          {selectedFund?.type === 'esop' && transactionFormData.transaction_type === 'buy' && transactionFormData.esop && (
+            <EsopFields
+              value={transactionFormData.esop}
+              grantType={selectedFund.esop_grant_type || 'rsu'}
+              units={transactionFormData.units ? parseFloat(transactionFormData.units) : null}
+              onChange={(esop) => setTransactionFormData({ ...transactionFormData, esop })}
+            />
           )}
           
           {transactionFormData.transaction_type === 'split' && (
@@ -1317,7 +1655,8 @@ export function Investments() {
             </div>
           )}
           
-          {transactionFormData.transaction_type !== 'split' && (
+          {transactionFormData.transaction_type !== 'split'
+            && !(selectedFund?.type === 'esop' && transactionFormData.transaction_type === 'buy') && (
             <div>
               <label className="block text-sm font-medium mb-2">
                 {transactionFormData.transaction_type === 'bonus' ? 'NAV (will be 0)' : 'NAV / Price'}
@@ -1345,7 +1684,7 @@ export function Investments() {
             </div>
           )}
           
-          {transactionFormData.units && transactionFormData.nav && transactionFormData.transaction_type !== 'bonus' && transactionFormData.transaction_type !== 'split' && (
+          {transactionFormData.units && transactionFormData.nav && transactionFormData.transaction_type !== 'bonus' && transactionFormData.transaction_type !== 'split' && selectedFund?.type !== 'esop' && (
             <div className="p-3 bg-muted rounded-md">
               <div className="text-sm text-muted-foreground">Total Amount</div>
               <div className="text-lg font-bold">
@@ -1353,6 +1692,54 @@ export function Investments() {
               </div>
             </div>
           )}
+
+          {selectedFund?.type === 'esop'
+            && transactionFormData.transaction_type === 'buy'
+            && transactionFormData.units
+            && transactionFormData.esop && (() => {
+              const units = parseFloat(transactionFormData.units);
+              const preview = prepareEsopTxnForApi(units, transactionFormData.esop);
+              if (preview.error) {
+                return (
+                  <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 rounded-md text-xs text-amber-700 dark:text-amber-300">
+                    ⚠ {preview.error}
+                  </div>
+                );
+              }
+              const grossValue = preview.fmv * units;
+              const netGain = grossValue - (preview.strike_price * units) - (preview.perquisite_tax || 0);
+              return (
+                <div className="p-3 bg-muted rounded-md space-y-1.5">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Value at Vest (FMV × units)</span>
+                    <span className="font-semibold">{formatCurrency(grossValue)}</span>
+                  </div>
+                  {preview.strike_price > 0 && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">Strike Paid</span>
+                      <span>− {formatCurrency(preview.strike_price * units)}</span>
+                    </div>
+                  )}
+                  {preview.perquisite_tax > 0 && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">Tax Paid (TDS)</span>
+                      <span>− {formatCurrency(preview.perquisite_tax)}</span>
+                    </div>
+                  )}
+                  <div className="border-t pt-1.5 flex justify-between text-sm">
+                    <span className="font-medium">Net Effective Value</span>
+                    <span className={`font-bold ${netGain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {formatCurrency(netGain)}
+                    </span>
+                  </div>
+                  {preview.fx_rate_source !== 'identity' && (
+                    <div className="text-[10px] text-muted-foreground pt-1">
+                      Converted at 1 {preview.original_currency} = ₹{preview.fx_rate?.toFixed(2)} ({preview.fx_rate_source})
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           <div className="flex justify-end gap-2 pt-4">
             <Button type="button" variant="outline" onClick={() => setIsAddTransactionModalOpen(false)}>
               Cancel
@@ -1480,6 +1867,8 @@ export function Investments() {
                 >
                   <option value="mutual_fund">Mutual Fund</option>
                   <option value="stock">Stock</option>
+                  <option value="private_share">Private Share (Unlisted)</option>
+                  <option value="esop">ESOP / RSU</option>
                   <option value="gold">Gold/Silver</option>
                   <option value="other">Other</option>
                 </select>
@@ -1652,13 +2041,84 @@ export function Investments() {
                     </>
                   )}
 
-                  {recordTxnData.fund_type !== 'mutual_fund' && recordTxnData.fund_type !== 'stock' && (
+                  {recordTxnData.fund_type !== 'mutual_fund' && recordTxnData.fund_type !== 'stock' && recordTxnData.fund_type !== 'esop' && (
                     <Input
                       value={recordTxnData.fund_name}
                       onChange={(e) => setRecordTxnData({ ...recordTxnData, fund_name: e.target.value, is_new_fund: true })}
                       placeholder="Investment name..."
                       required
                     />
+                  )}
+
+                  {recordTxnData.fund_type === 'esop' && (
+                    <div className="space-y-3 p-3 rounded-lg border border-dashed border-purple-300 bg-purple-50/40 dark:bg-purple-950/20">
+                      <div className="flex gap-2">
+                        {[
+                          { v: 'rsu', label: 'RSU' },
+                          { v: 'esop', label: 'ESOP' },
+                        ].map(opt => (
+                          <button
+                            key={opt.v}
+                            type="button"
+                            onClick={() => setRecordTxnData({
+                              ...recordTxnData,
+                              esop_grant_type: opt.v,
+                              esop: {
+                                ...(recordTxnData.esop || {
+                                  original_currency: recordTxnData.esop_currency || 'USD',
+                                  original_fmv: null, fx_rate: null,
+                                  fx_rate_source: null, perquisite_tax: null,
+                                }),
+                                original_strike_price: opt.v === 'rsu' ? 0 : null,
+                              },
+                            })}
+                            className={`flex-1 px-3 py-1.5 rounded-md text-sm font-medium border-2 transition ${
+                              recordTxnData.esop_grant_type === opt.v
+                                ? 'border-primary bg-primary/10'
+                                : 'border-muted hover:border-muted-foreground/40'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                      <Input
+                        value={recordTxnData.fund_name}
+                        onChange={(e) => setRecordTxnData({ ...recordTxnData, fund_name: e.target.value, is_new_fund: true })}
+                        placeholder={recordTxnData.esop_grant_type === 'rsu' ? 'e.g., Google RSU 2024' : 'e.g., Acme ESOP Grant'}
+                        required
+                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          value={recordTxnData.esop_company}
+                          onChange={(e) => setRecordTxnData({ ...recordTxnData, esop_company: e.target.value })}
+                          placeholder="Ticker (e.g., GOOG)"
+                          className="h-9 text-sm"
+                        />
+                        <select
+                          value={recordTxnData.esop_currency}
+                          onChange={(e) => setRecordTxnData({
+                            ...recordTxnData,
+                            esop_currency: e.target.value,
+                            esop: recordTxnData.esop ? {
+                              ...recordTxnData.esop,
+                              original_currency: e.target.value,
+                              fx_rate: e.target.value === 'INR' ? 1 : null,
+                            } : recordTxnData.esop,
+                          })}
+                          className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                        >
+                          <option value="INR">INR</option>
+                          <option value="USD">USD</option>
+                          <option value="EUR">EUR</option>
+                          <option value="GBP">GBP</option>
+                          <option value="SGD">SGD</option>
+                          <option value="AED">AED</option>
+                          <option value="AUD">AUD</option>
+                          <option value="CAD">CAD</option>
+                        </select>
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>
@@ -1691,7 +2151,11 @@ export function Investments() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium mb-2">Units *</label>
+                    <label className="block text-sm font-medium mb-2">
+                      {recordTxnData.fund_type === 'esop'
+                        ? `Units ${recordTxnData.transaction_type === 'buy' ? 'Vested' : ''} *`
+                        : 'Units *'}
+                    </label>
                     <Input
                       type="number"
                       step="0.0001"
@@ -1702,19 +2166,49 @@ export function Investments() {
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium mb-2">NAV / Price *</label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={recordTxnData.nav}
-                      onChange={(e) => setRecordTxnData({ ...recordTxnData, nav: e.target.value })}
-                      placeholder="e.g., 150.50"
-                      required
-                    />
-                  </div>
+                  {/* Hide standard NAV input for ESOP buys — replaced by EsopFields below */}
+                  {!(recordTxnData.fund_type === 'esop' && recordTxnData.transaction_type === 'buy') && (
+                    <div>
+                      <label className="block text-sm font-medium mb-2">NAV / Price *</label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={recordTxnData.nav}
+                        onChange={(e) => setRecordTxnData({ ...recordTxnData, nav: e.target.value })}
+                        placeholder="e.g., 150.50"
+                        required
+                      />
+                    </div>
+                  )}
 
-                  {recordTxnData.units && recordTxnData.nav && (
+                  {recordTxnData.fund_type === 'esop' && recordTxnData.transaction_type === 'buy' && (() => {
+                    // Ensure esop state object exists once user reaches this step
+                    if (!recordTxnData.esop) {
+                      // Lazy-init when user enters this branch for the first time
+                      setRecordTxnData(prev => ({
+                        ...prev,
+                        esop: {
+                          original_currency: prev.esop_currency || 'USD',
+                          original_strike_price: prev.esop_grant_type === 'rsu' ? 0 : null,
+                          original_fmv: null,
+                          fx_rate: null,
+                          fx_rate_source: null,
+                          perquisite_tax: null,
+                        },
+                      }));
+                      return null;
+                    }
+                    return (
+                      <EsopFields
+                        value={recordTxnData.esop}
+                        grantType={recordTxnData.esop_grant_type || 'rsu'}
+                        units={recordTxnData.units ? parseFloat(recordTxnData.units) : null}
+                        onChange={(esop) => setRecordTxnData({ ...recordTxnData, esop })}
+                      />
+                    );
+                  })()}
+
+                  {recordTxnData.units && recordTxnData.nav && recordTxnData.fund_type !== 'esop' && (
                     <div className="p-3 bg-muted rounded-md">
                       <div className="text-sm text-muted-foreground">Total Amount</div>
                       <div className="text-lg font-bold">
@@ -1722,6 +2216,50 @@ export function Investments() {
                       </div>
                     </div>
                   )}
+
+                  {recordTxnData.fund_type === 'esop'
+                    && recordTxnData.transaction_type === 'buy'
+                    && recordTxnData.units
+                    && recordTxnData.esop && (() => {
+                      const units = parseFloat(recordTxnData.units);
+                      const preview = prepareEsopTxnForApi(units, recordTxnData.esop);
+                      if (preview.error) {
+                        return (
+                          <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 rounded-md text-xs text-amber-700 dark:text-amber-300">
+                            ⚠ {preview.error}
+                          </div>
+                        );
+                      }
+                      const grossValue = preview.fmv * units;
+                      const strikePaid = preview.strike_price * units;
+                      const netGain = grossValue - strikePaid - (preview.perquisite_tax || 0);
+                      return (
+                        <div className="p-3 bg-muted rounded-md space-y-1.5">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-muted-foreground">Value at Vest</span>
+                            <span className="font-semibold">{formatCurrency(grossValue)}</span>
+                          </div>
+                          {strikePaid > 0 && (
+                            <div className="flex justify-between text-xs">
+                              <span className="text-muted-foreground">Strike Paid</span>
+                              <span>− {formatCurrency(strikePaid)}</span>
+                            </div>
+                          )}
+                          {preview.perquisite_tax > 0 && (
+                            <div className="flex justify-between text-xs">
+                              <span className="text-muted-foreground">Tax Paid</span>
+                              <span>− {formatCurrency(preview.perquisite_tax)}</span>
+                            </div>
+                          )}
+                          <div className="border-t pt-1.5 flex justify-between text-sm">
+                            <span className="font-medium">Net Effective Value</span>
+                            <span className={`font-bold ${netGain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {formatCurrency(netGain)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })()}
                 </div>
               )}
             </>
@@ -1734,9 +2272,18 @@ export function Investments() {
             }}>
               Cancel
             </Button>
-            <Button 
+            <Button
               type="submit"
-              disabled={!recordTxnData.account_id || (!recordTxnData.fund_id && !recordTxnData.fund_name && !recordTxnData.scheme_code && !recordTxnData.symbol) || !recordTxnData.units || !recordTxnData.nav}
+              disabled={
+                !recordTxnData.account_id ||
+                (!recordTxnData.fund_id && !recordTxnData.fund_name && !recordTxnData.scheme_code && !recordTxnData.symbol) ||
+                !recordTxnData.units ||
+                // NAV required for non-ESOP, OR for ESOP sell transactions
+                (recordTxnData.fund_type !== 'esop' && !recordTxnData.nav) ||
+                (recordTxnData.fund_type === 'esop' && recordTxnData.transaction_type !== 'buy' && !recordTxnData.nav) ||
+                // For ESOP buy: need FMV in either currency
+                (recordTxnData.fund_type === 'esop' && recordTxnData.transaction_type === 'buy' && !recordTxnData.esop?.original_fmv)
+              }
             >
               Record Transaction
             </Button>

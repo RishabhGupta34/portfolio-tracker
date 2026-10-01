@@ -124,7 +124,12 @@ export function calculateXIRR(transactions, currentValue, endDate = null) {
 }
 
 /**
- * Calculate fund metrics
+ * Calculate fund metrics.
+ *
+ * For ESOP/RSU funds, "invested" represents the user's true *out-of-pocket* cost
+ * (strike × units + perquisite tax), NOT the notional FMV value at vest. This way
+ * the displayed "returns" is the real cash gain. The FMV-at-vest is preserved on
+ * the transaction itself for the realized-gains FIFO computation later.
  */
 export function calculateFundMetrics(fund, historicalData = null) {
   if (!fund.transactions || fund.transactions.length === 0) {
@@ -144,10 +149,19 @@ export function calculateFundMetrics(fund, historicalData = null) {
 
   let totalInvested = 0;
   let currentUnits = 0;
+  const isEsop = fund.type === 'esop';
 
   for (const txn of fund.transactions) {
     if (txn.transaction_type === 'buy' || txn.transaction_type === 'bonus') {
-      totalInvested += txn.amount;
+      // ESOP buys use cost basis = strike × units + tax (out of pocket), not FMV.
+      // For everything else, fall back to txn.amount unchanged.
+      let costForThisTxn = txn.amount;
+      if (isEsop && (txn.strike_price != null || txn.perquisite_tax != null || txn.fmv != null)) {
+        const strikeCost = (txn.strike_price ?? 0) * (txn.units ?? 0);
+        const tax = txn.perquisite_tax ?? 0;
+        costForThisTxn = strikeCost + tax;
+      }
+      totalInvested += costForThisTxn;
       currentUnits += txn.units;
     } else if (txn.transaction_type === 'sell') {
       if (currentUnits > 0) {

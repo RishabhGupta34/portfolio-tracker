@@ -4,12 +4,79 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { Modal } from './ui/Modal';
-import { Plus, Briefcase } from 'lucide-react';
+import { Plus, Briefcase, AlertCircle } from 'lucide-react';
 import { formatCurrency, formatNumber } from '../lib/utils';
+import { computeAccountScorecard, scoreLabel } from '../lib/accountScorecard';
+
+const COLOR_CLASSES = {
+  green: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+  emerald: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+  amber: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  orange: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400',
+  red: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+  gray: 'bg-gray-100 text-gray-600 dark:bg-gray-800/40 dark:text-gray-400',
+};
+
+function ScorecardPanel({ scorecard }) {
+  const composite = scoreLabel(scorecard.composite);
+  const dimensions = [
+    { key: 'returns', label: 'Returns', score: scorecard.scores.returns },
+    { key: 'diversification', label: 'Diversification', score: scorecard.scores.diversification },
+    { key: 'allocation', label: 'Allocation', score: scorecard.scores.allocation },
+    { key: 'liquidity', label: 'Liquidity', score: scorecard.scores.liquidity },
+  ];
+
+  const { weakestLabel, equityPct, blendedXirr, targetEquityPct } = scorecard.diagnostics;
+
+  let recommendation = null;
+  if (weakestLabel === 'Returns' && blendedXirr != null) {
+    recommendation = `Blended XIRR is ${formatNumber(blendedXirr, 1)}% — review under-performing funds.`;
+  } else if (weakestLabel === 'Diversification') {
+    recommendation = 'Equity is concentrated in a few funds. Consider spreading risk.';
+  } else if (weakestLabel === 'Asset allocation' && equityPct != null) {
+    const drift = equityPct - targetEquityPct;
+    recommendation = drift > 0
+      ? `Equity at ${formatNumber(equityPct, 0)}% — ${formatNumber(drift, 0)}pp over the ${targetEquityPct}% target.`
+      : `Equity at ${formatNumber(equityPct, 0)}% — ${formatNumber(-drift, 0)}pp under the ${targetEquityPct}% target.`;
+  } else if (weakestLabel === 'Liquidity') {
+    recommendation = 'A large share is locked in PPF/EPF — check that emergency funds are accessible.';
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm font-medium">Account scorecard</span>
+        <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${COLOR_CLASSES[composite.color]}`}>
+          {scorecard.composite}/100 · {composite.label}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {dimensions.map(({ key, label, score }) => {
+          const meta = scoreLabel(score);
+          return (
+            <div key={key} className="flex items-center justify-between text-xs p-2 rounded bg-muted/40">
+              <span className="text-muted-foreground">{label}</span>
+              <span className={`font-semibold px-1.5 py-0.5 rounded ${COLOR_CLASSES[meta.color]}`}>
+                {score != null ? score : '—'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {recommendation && (
+        <div className="mt-2 p-2 rounded bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2">
+          <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+          <span>{recommendation}</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Accounts() {
   const [accounts, setAccounts] = useState([]);
   const [accountMetrics, setAccountMetrics] = useState({});
+  const [funds, setFunds] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({
@@ -23,13 +90,15 @@ export function Accounts() {
 
   const loadAccounts = async () => {
     try {
-      const [accountsRes, dashboardRes] = await Promise.all([
+      const [accountsRes, dashboardRes, fundsRes] = await Promise.all([
         portfolioApi.getAccounts(),
         portfolioApi.getDashboard(),
+        portfolioApi.getFunds(),
       ]);
-      
+
       setAccounts(accountsRes.data);
-      
+      setFunds(fundsRes.data);
+
       // Create metrics map
       const metricsMap = {};
       dashboardRes.data.account_metrics.forEach(({ account, metrics }) => {
@@ -99,6 +168,7 @@ export function Accounts() {
               fund_count: 0,
             };
             const isPositive = metrics.absolute_return >= 0;
+            const scorecard = computeAccountScorecard(account, funds);
 
             return (
               <Card key={account.id}>
@@ -148,6 +218,12 @@ export function Accounts() {
                         <span className="font-semibold">{metrics.fund_count}</span>
                       </div>
                     </div>
+
+                    {scorecard.composite != null && (
+                      <div className="pt-2 border-t">
+                        <ScorecardPanel scorecard={scorecard} />
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>

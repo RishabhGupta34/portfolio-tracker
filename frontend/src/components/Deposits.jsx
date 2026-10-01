@@ -9,7 +9,7 @@ import { toast } from './ui/Toast';
 import { Skeleton, SkeletonCard } from './ui/Skeleton';
 import { AnimatedCard, AnimatedList, AnimatedListItem } from './ui/AnimatedCard';
 import { Tooltip } from './ui/Tooltip';
-import { Plus, Landmark, Calculator, TrendingUp, Calendar, Edit, Trash2, Filter, PieChart, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Landmark, Calculator, TrendingUp, Calendar, Edit, Trash2, Filter, PieChart, ChevronDown, ChevronUp, Scissors } from 'lucide-react';
 import { formatCurrency, formatDate } from '../lib/utils';
 
 export function Deposits() {
@@ -24,6 +24,9 @@ export function Deposits() {
   const [selectedAccount, setSelectedAccount] = useState('all');
   const [selectedDepositType, setSelectedDepositType] = useState('all');
   const [expandedDeposits, setExpandedDeposits] = useState(new Set());
+  const [editingDeposit, setEditingDeposit] = useState(null);
+  const [breakFdDeposit, setBreakFdDeposit] = useState(null);
+  const [breakFdForm, setBreakFdForm] = useState({ break_date: new Date().toISOString().split('T')[0], actual_amount: '' });
   
   const [depositFormData, setDepositFormData] = useState({
     date: new Date().toISOString().split('T')[0],
@@ -55,6 +58,17 @@ export function Deposits() {
     interest_rate: '8.25',
     account_id: '',
     initial_balance: ''
+  });
+
+  const [editFormData, setEditFormData] = useState({
+    name: '',
+    bank: '',
+    principal: '',
+    interest_rate: '',
+    start_date: '',
+    maturity_date: '',
+    account_id: '',
+    ppf_account_number: '',
   });
 
   useEffect(() => {
@@ -248,6 +262,82 @@ export function Deposits() {
     }
   };
 
+  const openEditModal = (deposit) => {
+    setEditingDeposit(deposit);
+    setEditFormData({
+      name: deposit.name || '',
+      bank: deposit.bank || '',
+      principal: deposit.principal != null ? String(deposit.principal) : '',
+      interest_rate: deposit.interest_rate != null ? String(deposit.interest_rate) : '',
+      start_date: deposit.start_date || '',
+      maturity_date: deposit.maturity_date || '',
+      account_id: deposit.account_id || '',
+      ppf_account_number: deposit.ppf_account_number || '',
+    });
+  };
+
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+    if (!editingDeposit) return;
+
+    const isFD = editingDeposit.type === 'fd';
+    const payload = {
+      name: editFormData.name,
+      account_id: editFormData.account_id,
+      interest_rate: editFormData.interest_rate !== ''
+        ? parseFloat(editFormData.interest_rate)
+        : null,
+    };
+    if (isFD) {
+      payload.bank = editFormData.bank;
+      payload.principal = editFormData.principal !== ''
+        ? parseFloat(editFormData.principal)
+        : null;
+      payload.start_date = editFormData.start_date;
+      payload.maturity_date = editFormData.maturity_date;
+    } else {
+      payload.ppf_account_number = editFormData.ppf_account_number || null;
+    }
+
+    try {
+      await portfolioApi.updateFund(editingDeposit.id, payload);
+      // Recalculate FD maturity if rate/principal/dates changed
+      if (isFD) {
+        try { await portfolioApi.calculateFDMaturity(editingDeposit.id); } catch (_) {}
+      }
+      toast.success('Deposit updated successfully!');
+      setEditingDeposit(null);
+      loadData();
+    } catch (error) {
+      console.error('Error updating deposit:', error);
+      toast.error('Failed to update deposit: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
+  const openBreakFdModal = (deposit) => {
+    setBreakFdDeposit(deposit);
+    setBreakFdForm({ break_date: new Date().toISOString().split('T')[0], actual_amount: '' });
+  };
+
+  const handleBreakFd = async (e) => {
+    e.preventDefault();
+    if (!breakFdDeposit) return;
+    try {
+      const response = await portfolioApi.breakFd(breakFdDeposit.id, {
+        breakDate: breakFdForm.break_date,
+        actualAmount: parseFloat(breakFdForm.actual_amount),
+      });
+      const d = response.data;
+      toast.success(
+        `FD broken — received ${formatCurrency(d.actual_amount)}, interest ${formatCurrency(d.interest_earned)} (${d.effective_annual_pct?.toFixed(2) ?? d.effective_pct?.toFixed(2)}% effective p.a.)`
+      );
+      setBreakFdDeposit(null);
+      loadData();
+    } catch (error) {
+      toast.error('Failed to break FD: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
   const handleDeleteDeposit = async (depositId, depositName) => {
     if (!window.confirm(`Are you sure you want to delete "${depositName}"? This action cannot be undone.`)) {
       return;
@@ -266,19 +356,21 @@ export function Deposits() {
   // Filter deposits
   let filteredDeposits = deposits;
   if (selectedAccount !== 'all') {
-    filteredDeposits = filteredDeposits.filter(d => d.account_id === selectedAccount);
+    filteredDeposits = filteredDeposits.filter(d => String(d.account_id) === String(selectedAccount));
   }
   if (selectedDepositType !== 'all') {
     filteredDeposits = filteredDeposits.filter(d => d.type === selectedDepositType);
   }
 
-  // Calculate totals
-  const fdDeposits = filteredDeposits.filter(d => d.type === 'fd');
+  // Split active vs broken FDs
+  const activeFdDeposits = filteredDeposits.filter(d => d.type === 'fd' && !d.fd_broken);
+  const brokenFdDeposits = filteredDeposits.filter(d => d.type === 'fd' && d.fd_broken);
   const ppfDeposits = filteredDeposits.filter(d => d.type === 'ppf');
   const epfDeposits = filteredDeposits.filter(d => d.type === 'epf');
-  
-  const totalFDPrincipal = fdDeposits.reduce((sum, fd) => sum + (fd.principal || 0), 0);
-  const totalFDMaturity = fdDeposits.reduce((sum, fd) => sum + (fd.maturity_value || 0), 0);
+
+  // Calculate totals (exclude broken FDs)
+  const totalFDPrincipal = activeFdDeposits.reduce((sum, fd) => sum + (fd.principal || 0), 0);
+  const totalFDMaturity = activeFdDeposits.reduce((sum, fd) => sum + (fd.maturity_value || 0), 0);
   const totalPPFBalance = ppfDeposits.reduce((sum, ppf) => {
     const balance = ppf.transactions.reduce((s, t) => s + (t.transaction_type === 'buy' ? t.amount : -t.amount), 0);
     return sum + balance;
@@ -411,7 +503,7 @@ export function Deposits() {
             <div className="text-3xl font-bold text-indigo-600">{formatCurrency(totalValue)}</div>
             <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1">
               <TrendingUp className="h-3 w-3" />
-              {fdDeposits.length + ppfDeposits.length} deposits
+              {activeFdDeposits.length + ppfDeposits.length} deposits
             </p>
           </CardContent>
         </AnimatedCard>
@@ -429,7 +521,7 @@ export function Deposits() {
             <div className="text-3xl font-bold text-blue-600">{formatCurrency(totalFDPrincipal)}</div>
             <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1">
               <Calendar className="h-3 w-3" />
-              {fdDeposits.length} Fixed Deposits
+              {activeFdDeposits.length} Fixed Deposits
             </p>
           </CardContent>
         </AnimatedCard>
@@ -472,11 +564,11 @@ export function Deposits() {
       </div>
 
       {/* All Deposits List */}
-      {(fdDeposits.length > 0 || ppfDeposits.length > 0 || epfDeposits.length > 0) && (
+      {(activeFdDeposits.length > 0 || ppfDeposits.length > 0 || epfDeposits.length > 0) && (
         <div>
           <h3 className="text-2xl font-bold mb-4">All Deposits</h3>
           <AnimatedList>
-            {[...fdDeposits, ...ppfDeposits, ...epfDeposits].map((deposit) => {
+            {[...activeFdDeposits, ...ppfDeposits, ...epfDeposits].map((deposit) => {
               const account = accounts.find(a => a.id === deposit.account_id);
               const isExpanded = expandedDeposits.has(deposit.id);
               const isFD = deposit.type === 'fd';
@@ -534,13 +626,16 @@ export function Deposits() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className="text-sm font-medium">
-                            {isFD 
-                              ? formatDate(deposit.maturity_date) 
+                          <div className="text-sm font-medium flex items-center gap-1 justify-end">
+                            {isFD
+                              ? (deposit.fd_broken ? formatDate(deposit.fd_broken_date) : formatDate(deposit.maturity_date))
                               : `${deposit.transactions.length} txns`}
+                            {isFD && deposit.fd_broken && (
+                              <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">Broken</span>
+                            )}
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            {isFD ? 'Matures' : 'Deposits'}
+                            {isFD ? (deposit.fd_broken ? 'Broken' : 'Matures') : 'Deposits'}
                           </div>
                         </div>
                         <div className="text-right" onClick={(e) => e.stopPropagation()}>
@@ -563,6 +658,17 @@ export function Deposits() {
                       <div className="mt-4 pt-4 border-t">
                         {isFD ? (
                           <>
+                            {deposit.fd_broken && (
+                              <div className="mb-3 p-3 rounded-lg bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800/40 flex items-center gap-2">
+                                <Scissors className="h-4 w-4 text-orange-600 shrink-0" />
+                                <div>
+                                  <span className="text-sm font-semibold text-orange-700 dark:text-orange-400">Broken pre-maturity</span>
+                                  <span className="ml-2 text-xs text-orange-600 dark:text-orange-400">
+                                    on {formatDate(deposit.fd_broken_date)} · received {formatCurrency(deposit.fd_broken_amount || 0)}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                               <div>
                                 <div className="text-xs text-muted-foreground">Principal</div>
@@ -577,23 +683,58 @@ export function Deposits() {
                                 <div className="text-sm font-medium">{formatDate(deposit.start_date)}</div>
                               </div>
                               <div>
-                                <div className="text-xs text-muted-foreground">Maturity Date</div>
-                                <div className="text-sm font-medium">{formatDate(deposit.maturity_date)}</div>
+                                <div className="text-xs text-muted-foreground">{deposit.fd_broken ? 'Break Date' : 'Maturity Date'}</div>
+                                <div className="text-sm font-medium">{deposit.fd_broken ? formatDate(deposit.fd_broken_date) : formatDate(deposit.maturity_date)}</div>
                               </div>
                               <div className="col-span-2">
-                                <div className="text-xs text-muted-foreground">Maturity Value</div>
-                                <div className="text-2xl font-bold text-green-600">
-                                  {formatCurrency(deposit.maturity_value || 0)}
+                                <div className="text-xs text-muted-foreground">{deposit.fd_broken ? 'Amount Received' : 'Maturity Value'}</div>
+                                <div className={`text-2xl font-bold ${deposit.fd_broken ? 'text-orange-600' : 'text-green-600'}`}>
+                                  {formatCurrency(deposit.fd_broken ? (deposit.fd_broken_amount || 0) : (deposit.maturity_value || 0))}
                                 </div>
                               </div>
                               <div className="col-span-2">
-                                <div className="text-xs text-muted-foreground">Interest Earned</div>
+                                <div className="text-xs text-muted-foreground">Interest {deposit.fd_broken ? 'Received' : 'Earned'}</div>
                                 <div className="text-xl font-bold text-blue-600">
-                                  {formatCurrency((deposit.maturity_value || 0) - (deposit.principal || 0))}
+                                  {deposit.fd_broken
+                                    ? formatCurrency((deposit.fd_broken_amount || 0) - (deposit.principal || 0))
+                                    : formatCurrency((deposit.maturity_value || 0) - (deposit.principal || 0))}
                                 </div>
                               </div>
+                              {deposit.fd_broken && deposit.start_date && deposit.fd_broken_date && deposit.principal > 0 && (
+                                <div className="col-span-4">
+                                  {(() => {
+                                    const days = Math.floor((new Date(deposit.fd_broken_date) - new Date(deposit.start_date)) / (1000 * 60 * 60 * 24));
+                                    const interest = (deposit.fd_broken_amount || 0) - deposit.principal;
+                                    const effectivePct = days > 0 ? ((interest / deposit.principal) / (days / 365)) * 100 : 0;
+                                    return (
+                                      <div className="p-2 rounded bg-muted/50 text-xs text-muted-foreground">
+                                        Held {days} days · Effective annual return: <span className={`font-semibold ${effectivePct >= 0 ? 'text-green-600' : 'text-red-600'}`}>{effectivePct.toFixed(2)}% p.a.</span>
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              )}
                             </div>
-                            <div className="flex justify-end pt-2 border-t">
+                            <div className="flex justify-end gap-2 pt-2 border-t flex-wrap">
+                              {!deposit.fd_broken && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="border-orange-300 text-orange-700 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400"
+                                  onClick={() => openBreakFdModal(deposit)}
+                                >
+                                  <Scissors className="h-4 w-4 mr-2" />
+                                  Break FD
+                                </Button>
+                              )}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openEditModal(deposit)}
+                              >
+                                <Edit className="h-4 w-4 mr-2" />
+                                Edit FD
+                              </Button>
                               <Button
                                 variant="destructive"
                                 size="sm"
@@ -641,14 +782,22 @@ export function Deposits() {
                               </div>
                             )}
                             
-                            <div className="flex justify-end pt-4 border-t mt-4">
+                            <div className="flex justify-end gap-2 pt-4 border-t mt-4">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openEditModal(deposit)}
+                              >
+                                <Edit className="h-4 w-4 mr-2" />
+                                Edit {isEPF ? 'EPF' : 'PPF'}
+                              </Button>
                               <Button
                                 variant="destructive"
                                 size="sm"
                                 onClick={() => handleDeleteDeposit(deposit.id, deposit.name)}
                               >
                                 <Trash2 className="h-4 w-4 mr-2" />
-                                Delete PPF
+                                Delete {isEPF ? 'EPF' : 'PPF'}
                               </Button>
                             </div>
                           </div>
@@ -661,6 +810,74 @@ export function Deposits() {
               );
             })}
           </AnimatedList>
+        </div>
+      )}
+
+      {/* Broken FDs Table */}
+      {brokenFdDeposits.length > 0 && (
+        <div>
+          <h3 className="text-xl font-bold mb-3 flex items-center gap-2 text-orange-600 dark:text-orange-400">
+            <Scissors className="h-5 w-5" />
+            Broken FDs
+          </h3>
+          <Card className="overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/40">
+                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Name</th>
+                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Bank</th>
+                    <th className="text-right px-4 py-3 font-medium text-muted-foreground">Principal</th>
+                    <th className="text-right px-4 py-3 font-medium text-muted-foreground">Received</th>
+                    <th className="text-right px-4 py-3 font-medium text-muted-foreground">Interest</th>
+                    <th className="text-right px-4 py-3 font-medium text-muted-foreground">Broken On</th>
+                    <th className="text-right px-4 py-3 font-medium text-muted-foreground">Effective p.a.</th>
+                    <th className="px-4 py-3"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {brokenFdDeposits.map((fd) => {
+                    const days = fd.start_date && fd.fd_broken_date
+                      ? Math.floor((new Date(fd.fd_broken_date) - new Date(fd.start_date)) / 86400000)
+                      : 0;
+                    const interest = (fd.fd_broken_amount || 0) - (fd.principal || 0);
+                    const effectivePct = days > 0 && fd.principal > 0
+                      ? ((interest / fd.principal) / (days / 365)) * 100
+                      : 0;
+                    const account = accounts.find(a => a.id === fd.account_id);
+                    return (
+                      <tr key={fd.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                        <td className="px-4 py-3 font-medium">
+                          {fd.name}
+                          {account && <div className="text-xs text-muted-foreground">{account.name}</div>}
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">{fd.bank}</td>
+                        <td className="px-4 py-3 text-right">{formatCurrency(fd.principal || 0)}</td>
+                        <td className="px-4 py-3 text-right font-medium">{formatCurrency(fd.fd_broken_amount || 0)}</td>
+                        <td className={`px-4 py-3 text-right font-medium ${interest >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {interest >= 0 ? '+' : ''}{formatCurrency(interest)}
+                        </td>
+                        <td className="px-4 py-3 text-right text-muted-foreground">{formatDate(fd.fd_broken_date)}</td>
+                        <td className={`px-4 py-3 text-right font-semibold ${effectivePct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {effectivePct.toFixed(2)}%
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:text-destructive hover:bg-destructive/10 h-7 w-7 p-0"
+                            onClick={() => handleDeleteDeposit(fd.id, fd.name)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         </div>
       )}
 
@@ -1022,6 +1239,214 @@ export function Deposits() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Edit Deposit Modal */}
+      <Modal
+        isOpen={!!editingDeposit}
+        onClose={() => setEditingDeposit(null)}
+        title={editingDeposit ? `Edit ${editingDeposit.type === 'fd' ? 'FD' : editingDeposit.type === 'epf' ? 'EPF' : 'PPF'} - ${editingDeposit.name}` : 'Edit Deposit'}
+      >
+        {editingDeposit && (
+          <form onSubmit={handleEditSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">Name</label>
+              <Input
+                value={editFormData.name}
+                onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                required
+              />
+            </div>
+
+            {editingDeposit.type === 'fd' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium mb-2">Bank</label>
+                  <select
+                    value={editFormData.bank}
+                    onChange={(e) => setEditFormData({ ...editFormData, bank: e.target.value })}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    required
+                  >
+                    <option value="">Select Bank</option>
+                    {banks.map((bank) => (
+                      <option key={bank} value={bank}>{bank}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Principal Amount</label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editFormData.principal}
+                      onChange={(e) => setEditFormData({ ...editFormData, principal: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Interest Rate (%)</label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editFormData.interest_rate}
+                      onChange={(e) => setEditFormData({ ...editFormData, interest_rate: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Start Date</label>
+                    <DateInput
+                      value={editFormData.start_date}
+                      onChange={(e) => setEditFormData({ ...editFormData, start_date: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Maturity Date</label>
+                    <DateInput
+                      value={editFormData.maturity_date}
+                      onChange={(e) => setEditFormData({ ...editFormData, maturity_date: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {editingDeposit.type !== 'fd' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    {editingDeposit.type === 'epf' ? 'UAN/Account Number' : 'Account Number'}
+                  </label>
+                  <Input
+                    value={editFormData.ppf_account_number}
+                    onChange={(e) => setEditFormData({ ...editFormData, ppf_account_number: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">Interest Rate (%)</label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={editFormData.interest_rate}
+                    onChange={(e) => setEditFormData({ ...editFormData, interest_rate: e.target.value })}
+                    required
+                  />
+                </div>
+              </>
+            )}
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Account</label>
+              <select
+                value={editFormData.account_id}
+                onChange={(e) => setEditFormData({ ...editFormData, account_id: e.target.value })}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                required
+              >
+                <option value="">Select Account</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>{account.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4">
+              <Button type="button" variant="outline" onClick={() => setEditingDeposit(null)}>
+                Cancel
+              </Button>
+              <Button type="submit">Save Changes</Button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Break FD Modal */}
+      <Modal
+        isOpen={!!breakFdDeposit}
+        onClose={() => setBreakFdDeposit(null)}
+        title={breakFdDeposit ? `Break FD — ${breakFdDeposit.name}` : 'Break FD'}
+      >
+        {breakFdDeposit && (
+          <form onSubmit={handleBreakFd} className="space-y-4">
+            <div className="p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800/40 rounded-lg text-sm text-orange-700 dark:text-orange-400">
+              Breaking an FD before maturity will record the actual amount received and show this in Realized Gains.
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-muted-foreground">Principal</span>
+                <div className="font-semibold">{formatCurrency(breakFdDeposit.principal || 0)}</div>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Original Maturity</span>
+                <div className="font-semibold">{formatDate(breakFdDeposit.maturity_date)}</div>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Break Date</label>
+              <DateInput
+                value={breakFdForm.break_date}
+                onChange={(e) => setBreakFdForm({ ...breakFdForm, break_date: e.target.value })}
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Actual Amount Received</label>
+              <Input
+                type="number"
+                step="0.01"
+                value={breakFdForm.actual_amount}
+                onChange={(e) => setBreakFdForm({ ...breakFdForm, actual_amount: e.target.value })}
+                placeholder="e.g., 105000"
+                required
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                The total amount your bank credited (principal + whatever interest they paid)
+              </p>
+            </div>
+
+            {breakFdForm.actual_amount && breakFdDeposit.principal && (
+              <div className="p-3 bg-muted rounded-md text-sm space-y-1">
+                {(() => {
+                  const received = parseFloat(breakFdForm.actual_amount);
+                  const principal = breakFdDeposit.principal;
+                  const interest = received - principal;
+                  const days = breakFdDeposit.start_date && breakFdForm.break_date
+                    ? Math.floor((new Date(breakFdForm.break_date) - new Date(breakFdDeposit.start_date)) / (1000 * 60 * 60 * 24))
+                    : 0;
+                  const annualPct = days > 0 && principal > 0 ? ((interest / principal) / (days / 365)) * 100 : 0;
+                  return (
+                    <>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Interest earned</span><span className={`font-semibold ${interest >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(interest)}</span></div>
+                      {days > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Days held</span><span className="font-medium">{days} days</span></div>}
+                      {days > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Effective annual return</span><span className={`font-semibold ${annualPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>{annualPct.toFixed(2)}% p.a.</span></div>}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-4">
+              <Button type="button" variant="outline" onClick={() => setBreakFdDeposit(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" className="bg-orange-600 hover:bg-orange-700 text-white">
+                <Scissors className="h-4 w-4 mr-2" />
+                Break FD
+              </Button>
+            </div>
+          </form>
+        )}
       </Modal>
     </div>
   );

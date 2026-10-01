@@ -656,10 +656,32 @@ export function computeRiskMetrics(priceData, benchmarkData = null, riskFreeRate
   const varIndex = Math.floor(dailyReturns.length * 0.05);
   const var95 = sortedReturns[varIndex] || 0;
 
-  // Beta & Alpha (if benchmark provided)
+  // ----------------------------------------------------------
+  // Ulcer Index (mf-screener metric #1)
+  // Depth × duration of drawdowns. Penalises long, deep DDs more than a single
+  // crash. Formula: sqrt(mean(drawdownPct²)) over the full price series.
+  // Lower is better. Calmar-style "Ulcer Performance Index" then divides
+  // excess return by ulcer to get a risk-adjusted figure.
+  // ----------------------------------------------------------
+  let runningPeak = closes[0];
+  let ddSquaredSum = 0;
+  for (let i = 0; i < closes.length; i++) {
+    if (closes[i] > runningPeak) runningPeak = closes[i];
+    const ddPct = ((closes[i] - runningPeak) / runningPeak) * 100; // negative or 0
+    ddSquaredSum += ddPct * ddPct;
+  }
+  const ulcerIndex = Math.sqrt(ddSquaredSum / closes.length);
+  const ulcerPerformanceIndex = ulcerIndex > 0
+    ? (annualizedReturn - riskFreeRate) * 100 / ulcerIndex
+    : null;
+
+  // Beta & Alpha + up/down capture (if benchmark provided)
   let beta = null;
   let alpha = null;
   let rSquared = null;
+  let upCapture = null;
+  let downCapture = null;
+  let captureSpread = null;
 
   if (benchmarkData && benchmarkData.length > 30) {
     const benchCloses = benchmarkData.map(d => d.close);
@@ -697,6 +719,35 @@ export function computeRiskMetrics(priceData, benchmarkData = null, riskFreeRate
     const denominator = Math.sqrt(fundVariance * benchVariance);
     const correlation = denominator > 0 ? covariance / denominator : 0;
     rSquared = correlation * correlation;
+
+    // ----------------------------------------------------------
+    // Up / Down capture ratios (mf-screener metric #3)
+    // up_capture   = mean(fund_ret on bench_up_days)   / mean(bench_up)   * 100
+    // down_capture = mean(fund_ret on bench_down_days) / mean(bench_down) * 100
+    // For a "good" equity fund: up > 100, down < 100, spread (up - down) > 0.
+    // ----------------------------------------------------------
+    let upBenchSum = 0, upBenchCount = 0, upFundSum = 0;
+    let dnBenchSum = 0, dnBenchCount = 0, dnFundSum = 0;
+    for (let i = 0; i < minLen; i++) {
+      if (benchRet[i] > 0) {
+        upBenchSum += benchRet[i];
+        upFundSum += fundRet[i];
+        upBenchCount++;
+      } else if (benchRet[i] < 0) {
+        dnBenchSum += benchRet[i];
+        dnFundSum += fundRet[i];
+        dnBenchCount++;
+      }
+    }
+    if (upBenchCount > 0 && upBenchSum !== 0) {
+      upCapture = ((upFundSum / upBenchCount) / (upBenchSum / upBenchCount)) * 100;
+    }
+    if (dnBenchCount > 0 && dnBenchSum !== 0) {
+      downCapture = ((dnFundSum / dnBenchCount) / (dnBenchSum / dnBenchCount)) * 100;
+    }
+    if (upCapture !== null && downCapture !== null) {
+      captureSpread = upCapture - downCapture;
+    }
   }
 
   return {
@@ -705,11 +756,98 @@ export function computeRiskMetrics(priceData, benchmarkData = null, riskFreeRate
     sharpeRatio: Math.round(sharpeRatio * 100) / 100,
     sortinoRatio: Math.round(sortinoRatio * 100) / 100,
     maxDrawdown: Math.round(maxDrawdown * 10000) / 100,
+    ulcerIndex: Math.round(ulcerIndex * 100) / 100,
+    ulcerPerformanceIndex: ulcerPerformanceIndex !== null ? Math.round(ulcerPerformanceIndex * 100) / 100 : null,
     var95: Math.round(var95 * 10000) / 100,
     beta: beta !== null ? Math.round(beta * 100) / 100 : null,
     alpha: alpha !== null ? Math.round(alpha * 10000) / 100 : null,
     rSquared: rSquared !== null ? Math.round(rSquared * 10000) / 100 : null,
+    upCapture: upCapture !== null ? Math.round(upCapture * 100) / 100 : null,
+    downCapture: downCapture !== null ? Math.round(downCapture * 100) / 100 : null,
+    captureSpread: captureSpread !== null ? Math.round(captureSpread * 100) / 100 : null,
+    historyDays: closes.length,
     insufficient: false,
+  };
+}
+
+/**
+ * Rolling SIP-XIRR stability (mf-screener metric #4)
+ *
+ * Simulates a monthly ₹1 SIP starting on each calendar month of the price series,
+ * holds for `holdMonths` months, and records the annualised return achieved.
+ * Output is the std-dev of those rolling returns — a "consistency" signal that
+ * penalises funds whose point-XIRR looks great but is path-dependent.
+ *
+ * Returns null if there isn't enough history for at least 6 windows.
+ *
+ * @param {Array<{date:string, close:number}>} priceData chronological NAV series
+ * @param {number} sipMonths length of the SIP phase (default 12)
+ * @param {number} holdMonths length of the hold phase after the SIP (default 12)
+ * @returns {{median:number, stdev:number, min:number, windows:number}|null}
+ */
+export function computeSipXirrStability(priceData, sipMonths = 12, holdMonths = 12) {
+  if (!priceData || priceData.length < (sipMonths + holdMonths) * 21) return null;
+
+  // Build a price-by-date map and a sorted month list (1st-of-month NAV)
+  const priceByDate = new Map();
+  for (const d of priceData) priceByDate.set(d.date, d.close);
+
+  // Bucket the latest NAV per (yyyy-mm) — used as monthly SIP installment NAV
+  const monthlyNav = [];
+  let lastBucket = '';
+  for (const d of priceData) {
+    const bucket = d.date.slice(0, 7); // YYYY-MM
+    if (bucket !== lastBucket) {
+      monthlyNav.push({ ym: bucket, nav: d.close });
+      lastBucket = bucket;
+    } else {
+      // Keep the latest NAV in the bucket (replace)
+      monthlyNav[monthlyNav.length - 1].nav = d.close;
+    }
+  }
+
+  const totalMonths = sipMonths + holdMonths;
+  if (monthlyNav.length < totalMonths + 1) return null;
+
+  // For each possible start month, simulate the SIP+hold and record return
+  const windowReturns = [];
+  for (let start = 0; start + totalMonths < monthlyNav.length; start++) {
+    let units = 0;
+    let invested = 0;
+    for (let m = 0; m < sipMonths; m++) {
+      const nav = monthlyNav[start + m].nav;
+      if (nav > 0) {
+        units += 1 / nav; // ₹1 SIP
+        invested += 1;
+      }
+    }
+    if (invested === 0 || units === 0) continue;
+    const exitNav = monthlyNav[start + totalMonths].nav;
+    const finalValue = units * exitNav;
+    // Crude annualised return for the SIP — uses (totalMonths/12) tenor and a
+    // half-period assumption for the SIP cash flows (good enough for a stability metric).
+    const years = totalMonths / 12;
+    const avgYears = (sipMonths / 24) + (holdMonths / 12); // dollar-weighted avg duration
+    const denomYears = Math.max(0.25, avgYears);
+    if (finalValue <= 0 || invested <= 0) continue;
+    const ret = (Math.pow(finalValue / invested, 1 / denomYears) - 1) * 100;
+    if (Number.isFinite(ret)) windowReturns.push(ret);
+  }
+
+  if (windowReturns.length < 6) return null;
+
+  const sorted = [...windowReturns].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const mean = windowReturns.reduce((a, b) => a + b, 0) / windowReturns.length;
+  const variance = windowReturns.reduce((s, r) => s + (r - mean) * (r - mean), 0) / windowReturns.length;
+  const stdev = Math.sqrt(variance);
+  const min = sorted[0];
+
+  return {
+    median: Math.round(median * 100) / 100,
+    stdev: Math.round(stdev * 100) / 100,
+    min: Math.round(min * 100) / 100,
+    windows: windowReturns.length,
   };
 }
 

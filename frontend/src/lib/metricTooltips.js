@@ -77,6 +77,22 @@ const TOOLTIPS = {
     'Extra return earned above what you\'d expect given the risk taken (compared to benchmark). Positive alpha = fund manager is adding value. Negative = underperforming.',
   'R²':
     'How closely the fund follows its benchmark. 90%+ means it moves almost identically to the benchmark. Low R² means the fund has its own unique behavior.',
+  'Ulcer Index':
+    'Combines the depth AND duration of drawdowns into one number. Where Max Drawdown only shows the single worst dip, Ulcer Index also penalises funds that stay underwater for long stretches. Lower is better.',
+  'Ulcer Performance Index':
+    'Excess return per unit of ulcer pain — like Sharpe but using Ulcer Index instead of volatility. Higher = better recovery-adjusted returns.',
+  'Up Capture':
+    'On days the benchmark rose, how much of the move did the fund capture? 100 = matched the market, >100 = participated more than the market on up days, <100 = lagged.',
+  'Down Capture':
+    'On days the benchmark fell, how much of the loss did the fund take? 100 = fell with the market, <100 = cushioned the fall (good), >100 = amplified the loss (bad).',
+  'Capture Spread':
+    'Up Capture minus Down Capture. Positive means the fund participates more on the upside than it suffers on the downside — the gold standard for active management.',
+  'SIP Stability (Median)':
+    'Median annualised return across all simulated 12-month-SIP + 12-month-hold windows in the fund\'s history. Captures the typical investor experience, not just the point-in-time number.',
+  'SIP Stability (Std-Dev)':
+    'How much the simulated SIP outcomes vary from window to window. Lower = more predictable; a great point XIRR with a huge stdev is path-dependent luck.',
+  'History Confidence':
+    'How much NAV history is available. Young funds (<3y) have their composite score pulled towards neutral because their numbers are noisier — a brilliant 1-year track record might just be a lucky regime.',
 
   // ─── Rolling Returns ───────────────────────
   '1 Week': 'Return over the last 5 trading days.',

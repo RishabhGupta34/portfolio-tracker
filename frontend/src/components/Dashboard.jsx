@@ -8,6 +8,8 @@ import { Skeleton, SkeletonCard } from './ui/Skeleton';
 import { toast } from './ui/Toast';
 import { matchesTypeFilter, isGoldFund } from '../lib/fundUtils';
 import { calculateAccountMetrics, calculateXIRR } from '../lib/calculations';
+import { AssetAllocation } from './AssetAllocation';
+import { InsightsSummary } from './InsightsSummary';
 
 export function Dashboard() {
   const [dashboardData, setDashboardData] = useState(null);
@@ -390,8 +392,11 @@ export function Dashboard() {
     const typeNames = {
       'mutual_fund': 'Mutual Funds',
       'stock': 'Stocks',
+      'private_share': 'Private Shares',
+      'esop': 'ESOP / RSU',
       'fd': 'Fixed Deposits',
       'ppf': 'PPF',
+      'epf': 'EPF',
       'gold': 'Gold/Silver',
       'other': 'Other'
     };
@@ -662,6 +667,19 @@ export function Dashboard() {
         </div>
       </div>
 
+
+      {/* Target Asset Allocation - portfolio-wide drift */}
+      {dashboardData?.fund_metrics && (
+        <AssetAllocation
+          fundMetrics={dashboardData.fund_metrics.filter(fm => fm.metrics.current_value > 0)}
+          hideValues={hideValues}
+        />
+      )}
+
+      {/* Insights / X-Ray summary — surfaces deeper analysis tabs */}
+      {dashboardData?.fund_metrics && (
+        <InsightsSummary fundMetrics={dashboardData.fund_metrics} />
+      )}
 
       {/* Account-wise Performance - Filtered */}
       {dashboardData.account_metrics && dashboardData.account_metrics.length > 0 && (

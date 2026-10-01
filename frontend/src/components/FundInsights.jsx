@@ -19,6 +19,7 @@ import {
   computeTechnicalIndicators,
   computeRiskMetrics,
   computeRollingReturns,
+  computeSipXirrStability,
   getDiscoverCategories,
   getDiscoverItems,
   analyzeDiscoverItem,
@@ -248,6 +249,9 @@ export function FundInsights() {
         const technicals = computeTechnicalIndicators(priceData);
         const riskMetrics = computeRiskMetrics(priceData);
         const rollingReturns = computeRollingReturns(priceData);
+        // mf-screener metric #4: rolling SIP-XIRR stability (mutual funds only — stock
+        // SIPs are uncommon; we only have benchmark-aware variants for MFs).
+        const sipStability = isMutualFund ? computeSipXirrStability(priceData) : null;
         const sortedTxns = [...fund.allTransactions].sort((a, b) => a.date.localeCompare(b.date));
         const firstTxnDate = sortedTxns.length > 0 ? new Date(sortedTxns[0].date) : null;
         const holdingDays = firstTxnDate ? Math.floor((Date.now() - firstTxnDate.getTime()) / 86400000) : null;
@@ -265,11 +269,16 @@ export function FundInsights() {
 
         const fundScore = scoreFundamentals(fundamentals, isMutualFund, { rollingReturns, riskMetrics, meta, xrayData });
         const techScore = scoreTechnicals(technicals);
-        const riskScore = scoreRisk(riskMetrics);
-        const momScore = scoreMomentum(rollingReturns, technicals);
+        const riskScore = scoreRisk(riskMetrics, { meta, xrayData });
+        const momScore = scoreMomentum(rollingReturns, technicals, { sipStability });
         const personalScore = scorePersonal({ xirr: fund.xirr, holdingDays, portfolioWeight: totalPortfolioValue > 0 ? (fund.currentValue / totalPortfolioValue) * 100 : 0, totalInvested: fund.totalInvested, currentValue: fund.currentValue });
-        const final = computeFinalScore({ fundamental: fundScore, technical: techScore, risk: riskScore, momentum: momScore, personal: personalScore }, null, isMutualFund);
-        results[fund.key] = { fundamentals, technicals, riskMetrics, rollingReturns, meta, holdingDays, xrayData, ...final };
+        const final = computeFinalScore(
+          { fundamental: fundScore, technical: techScore, risk: riskScore, momentum: momScore, personal: personalScore },
+          null,
+          isMutualFund,
+          { historyDays: riskMetrics?.historyDays ?? priceData.length }
+        );
+        results[fund.key] = { fundamentals, technicals, riskMetrics, rollingReturns, sipStability, meta, holdingDays, xrayData, ...final };
       } catch (err) {
         results[fund.key] = { score: 50, recommendation: { label: 'No Data', color: '#9ca3af', bgColor: '#f3f4f6' }, scores: {}, error: err.message };
       }
@@ -624,16 +633,22 @@ function DiscoverSection({ activeFunds }) {
     try {
       const raw = await analyzeDiscoverItem(item);
       const isMF = item.type === 'mutual_fund';
+      const sipStability = isMF ? computeSipXirrStability(raw.priceData || []) : null;
       const fundScore = scoreFundamentals(raw.fundamentals, isMF, { rollingReturns: raw.rollingReturns, riskMetrics: raw.riskMetrics, meta: raw.meta });
       const techScore = scoreTechnicals(raw.technicals);
-      const riskScore = scoreRisk(raw.riskMetrics);
-      const momScore = scoreMomentum(raw.rollingReturns, raw.technicals);
-      const final = computeFinalScore({
-        fundamental: fundScore, technical: techScore, risk: riskScore, momentum: momScore,
-        personal: { score: 50, details: {}, label: 'N/A' },
-      }, null, isMF);
+      const riskScore = scoreRisk(raw.riskMetrics, { meta: raw.meta });
+      const momScore = scoreMomentum(raw.rollingReturns, raw.technicals, { sipStability });
+      const final = computeFinalScore(
+        {
+          fundamental: fundScore, technical: techScore, risk: riskScore, momentum: momScore,
+          personal: { score: 50, details: {}, label: 'N/A' },
+        },
+        null,
+        isMF,
+        { historyDays: raw.riskMetrics?.historyDays ?? (raw.priceData?.length ?? null) }
+      );
       return {
-        ...final, item,
+        ...final, sipStability, item,
         fundamentals: raw.fundamentals, technicals: raw.technicals,
         riskMetrics: raw.riskMetrics, rollingReturns: raw.rollingReturns, meta: raw.meta,
       };
@@ -701,16 +716,22 @@ function DiscoverSection({ activeFunds }) {
         try {
           const raw = await analyzeDiscoverItem(item);
           const isMF = item.type === 'mutual_fund';
+          const sipStability = isMF ? computeSipXirrStability(raw.priceData || []) : null;
           const fundScore = scoreFundamentals(raw.fundamentals, isMF, { rollingReturns: raw.rollingReturns, riskMetrics: raw.riskMetrics, meta: raw.meta });
           const techScore = scoreTechnicals(raw.technicals);
-          const riskScore = scoreRisk(raw.riskMetrics);
-          const momScore = scoreMomentum(raw.rollingReturns, raw.technicals);
-          const final = computeFinalScore({
-            fundamental: fundScore, technical: techScore, risk: riskScore, momentum: momScore,
-            personal: { score: 50, details: {}, label: 'N/A' },
-          }, null, isMF);
+          const riskScore = scoreRisk(raw.riskMetrics, { meta: raw.meta });
+          const momScore = scoreMomentum(raw.rollingReturns, raw.technicals, { sipStability });
+          const final = computeFinalScore(
+            {
+              fundamental: fundScore, technical: techScore, risk: riskScore, momentum: momScore,
+              personal: { score: 50, details: {}, label: 'N/A' },
+            },
+            null,
+            isMF,
+            { historyDays: raw.riskMetrics?.historyDays ?? (raw.priceData?.length ?? null) }
+          );
           results[item.symbol || item.schemeCode] = {
-            ...final, item,
+            ...final, sipStability, item,
             fundamentals: raw.fundamentals, technicals: raw.technicals,
             riskMetrics: raw.riskMetrics, rollingReturns: raw.rollingReturns, meta: raw.meta,
           };
@@ -1078,7 +1099,7 @@ function DiscoverSection({ activeFunds }) {
 }
 
 function DiscoverCard({ result, expanded, onToggle, isCustom, isPortfolio, onRemove }) {
-  const { item, score, recommendation, scores, technicals, fundamentals, riskMetrics, rollingReturns, meta, error } = result;
+  const { item, score, recommendation, scores, technicals, fundamentals, riskMetrics, rollingReturns, sipStability, confidence, meta, error } = result;
   if (!item) return null;
 
   return (
@@ -1197,6 +1218,37 @@ function DiscoverCard({ result, expanded, onToggle, isCustom, isPortfolio, onRem
                 <MetricRow label="Sharpe Ratio" value={riskMetrics.sharpeRatio?.toFixed(2)} signal={riskMetrics.sharpeRatio > 1 ? 'positive' : riskMetrics.sharpeRatio < 0 ? 'negative' : 'neutral'} />
                 <MetricRow label="Max Drawdown" value={`-${riskMetrics.maxDrawdown}%`} signal={riskMetrics.maxDrawdown < 15 ? 'positive' : 'negative'} />
                 <MetricRow label="Sortino Ratio" value={riskMetrics.sortinoRatio?.toFixed(2)} signal={riskMetrics.sortinoRatio > 1 ? 'positive' : 'neutral'} />
+                {riskMetrics.ulcerIndex != null && (
+                  <MetricRow label="Ulcer Index" value={riskMetrics.ulcerIndex} signal={riskMetrics.ulcerIndex < 8 ? 'positive' : riskMetrics.ulcerIndex > 15 ? 'negative' : 'neutral'} />
+                )}
+                {riskMetrics.upCapture != null && (
+                  <MetricRow label="Up Capture" value={riskMetrics.upCapture} signal={riskMetrics.upCapture > 100 ? 'positive' : 'neutral'} />
+                )}
+                {riskMetrics.downCapture != null && (
+                  <MetricRow label="Down Capture" value={riskMetrics.downCapture} signal={riskMetrics.downCapture < 90 ? 'positive' : riskMetrics.downCapture > 110 ? 'negative' : 'neutral'} />
+                )}
+                {riskMetrics.captureSpread != null && (
+                  <MetricRow label="Capture Spread" value={riskMetrics.captureSpread} signal={riskMetrics.captureSpread > 10 ? 'positive' : riskMetrics.captureSpread < -5 ? 'negative' : 'neutral'} />
+                )}
+              </div>
+            </DetailSection>
+          )}
+
+          {sipStability && sipStability.windows >= 6 && (
+            <DetailSection title="Rolling SIP Stability (12m SIP + 12m hold)">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                <MetricRow label="SIP Stability (Median)" value={`${sipStability.median}%`} signal={sipStability.median > 10 ? 'positive' : sipStability.median < 4 ? 'negative' : 'neutral'} />
+                <MetricRow label="SIP Stability (Std-Dev)" value={`${sipStability.stdev}%`} signal={sipStability.stdev < 8 ? 'positive' : sipStability.stdev > 14 ? 'negative' : 'neutral'} />
+                <MetricRow label="Worst Window" value={`${sipStability.min}%`} signal={sipStability.min > 0 ? 'positive' : 'negative'} />
+                <MetricRow label="Windows Tested" value={sipStability.windows} />
+              </div>
+            </DetailSection>
+          )}
+
+          {confidence && (
+            <DetailSection title="History Confidence">
+              <div className="text-xs text-muted-foreground">
+                <span className="font-medium">{confidence.label}</span> — composite score weighted by ×{confidence.multiplier} to account for limited NAV history.
               </div>
             </DetailSection>
           )}
@@ -1362,13 +1414,27 @@ function FundInsightCard({ fund, analysis, expanded, onToggle, hideValues, portf
             </div>
           )}
 
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <DimensionCard label={fund.type === 'mutual_fund' ? 'Fund Quality' : 'Fundamental'} scoreData={scores.fundamental} icon={BarChart3} />
             <DimensionCard label="Technical" scoreData={scores.technical} icon={Activity} />
             <DimensionCard label="Risk" scoreData={scores.risk} icon={Shield} />
             <DimensionCard label="Momentum" scoreData={scores.momentum} icon={Zap} />
-            <DimensionCard label="Personal" scoreData={scores.personal} icon={Target} />
           </div>
+
+          {scores.personal && Object.keys(scores.personal.details || {}).length > 0 && (
+            <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                <Target className="h-3.5 w-3.5" />
+                <span>Your position</span>
+                <span className="ml-auto text-[10px] uppercase tracking-wide">excluded from recommendation</span>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                {Object.entries(scores.personal.details).map(([key, val]) => (
+                  <div key={key} className="rounded bg-background/60 px-2 py-1 truncate" title={val}>{val}</div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {analysis.technicals && !analysis.technicals.insufficient && (
             <DetailSection title="Technical Indicators">
@@ -1458,10 +1524,41 @@ function FundInsightCard({ fund, analysis, expanded, onToggle, hideValues, portf
                 <MetricRow label="Sharpe Ratio" value={analysis.riskMetrics.sharpeRatio?.toFixed(2)} signal={analysis.riskMetrics.sharpeRatio > 1 ? 'positive' : analysis.riskMetrics.sharpeRatio < 0 ? 'negative' : 'neutral'} />
                 <MetricRow label="Sortino Ratio" value={analysis.riskMetrics.sortinoRatio?.toFixed(2)} signal={analysis.riskMetrics.sortinoRatio > 1 ? 'positive' : 'neutral'} />
                 <MetricRow label="Max Drawdown" value={`-${analysis.riskMetrics.maxDrawdown}%`} signal={analysis.riskMetrics.maxDrawdown < 15 ? 'positive' : 'negative'} />
+                {analysis.riskMetrics.ulcerIndex != null && (
+                  <MetricRow label="Ulcer Index" value={analysis.riskMetrics.ulcerIndex} signal={analysis.riskMetrics.ulcerIndex < 8 ? 'positive' : analysis.riskMetrics.ulcerIndex > 15 ? 'negative' : 'neutral'} />
+                )}
+                {analysis.riskMetrics.upCapture != null && (
+                  <MetricRow label="Up Capture" value={analysis.riskMetrics.upCapture} signal={analysis.riskMetrics.upCapture > 100 ? 'positive' : 'neutral'} />
+                )}
+                {analysis.riskMetrics.downCapture != null && (
+                  <MetricRow label="Down Capture" value={analysis.riskMetrics.downCapture} signal={analysis.riskMetrics.downCapture < 90 ? 'positive' : analysis.riskMetrics.downCapture > 110 ? 'negative' : 'neutral'} />
+                )}
+                {analysis.riskMetrics.captureSpread != null && (
+                  <MetricRow label="Capture Spread" value={analysis.riskMetrics.captureSpread} signal={analysis.riskMetrics.captureSpread > 10 ? 'positive' : analysis.riskMetrics.captureSpread < -5 ? 'negative' : 'neutral'} />
+                )}
                 <MetricRow label="VaR (95%)" value={`${analysis.riskMetrics.var95}%`} />
                 {analysis.riskMetrics.beta !== null && <MetricRow label="Beta" value={analysis.riskMetrics.beta?.toFixed(2)} />}
                 {analysis.riskMetrics.alpha !== null && <MetricRow label="Alpha" value={`${analysis.riskMetrics.alpha}%`} signal={analysis.riskMetrics.alpha > 0 ? 'positive' : 'negative'} />}
                 {analysis.riskMetrics.rSquared !== null && <MetricRow label="R²" value={`${analysis.riskMetrics.rSquared}%`} />}
+              </div>
+            </DetailSection>
+          )}
+
+          {analysis.sipStability && analysis.sipStability.windows >= 6 && (
+            <DetailSection title="Rolling SIP Stability (12m SIP + 12m hold)">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                <MetricRow label="SIP Stability (Median)" value={`${analysis.sipStability.median}%`} signal={analysis.sipStability.median > 10 ? 'positive' : analysis.sipStability.median < 4 ? 'negative' : 'neutral'} />
+                <MetricRow label="SIP Stability (Std-Dev)" value={`${analysis.sipStability.stdev}%`} signal={analysis.sipStability.stdev < 8 ? 'positive' : analysis.sipStability.stdev > 14 ? 'negative' : 'neutral'} />
+                <MetricRow label="Worst Window" value={`${analysis.sipStability.min}%`} signal={analysis.sipStability.min > 0 ? 'positive' : 'negative'} />
+                <MetricRow label="Windows Tested" value={analysis.sipStability.windows} />
+              </div>
+            </DetailSection>
+          )}
+
+          {analysis.confidence && (
+            <DetailSection title="History Confidence">
+              <div className="text-xs text-muted-foreground">
+                <span className="font-medium">{analysis.confidence.label}</span> — composite score weighted by ×{analysis.confidence.multiplier} to account for limited NAV history.
               </div>
             </DetailSection>
           )}

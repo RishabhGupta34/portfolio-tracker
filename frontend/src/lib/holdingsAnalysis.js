@@ -615,9 +615,155 @@ export function aggregatePortfolioHoldings(fundResults) {
   };
 }
 
+// ============================================================
+// 5b. Pairwise Overlap & Portfolio Diversification Index
+// ============================================================
+//
+// Yahoo's `topHoldings` only returns the top ~10 holdings per fund (~50% of fund AUM).
+// The numbers below are therefore APPROXIMATE — they cover the top holdings of each
+// fund and miss the long tail. For full-portfolio overlap, replace with AMFI monthly
+// portfolio disclosures (see backend/services/amfi_holdings.py).
+
+function buildHoldingsMap(holdings) {
+  const map = new Map();
+  for (const h of holdings || []) {
+    const key = normalizeCompanyKey(h.symbol, h.name);
+    map.set(key, (map.get(key) || 0) + (h.percent || 0));
+  }
+  return map;
+}
+
+/**
+ * Weighted overlap between two funds: Σ min(weight_in_A, weight_in_B) across common
+ * holdings. Both weights are within-fund percentages (0-100), so the result is also
+ * 0-100 — 100 means identical top holdings, 0 means disjoint.
+ */
+function computePairOverlap(holdingsA, holdingsB) {
+  const a = buildHoldingsMap(holdingsA);
+  const b = buildHoldingsMap(holdingsB);
+  let overlap = 0;
+  for (const [key, wA] of a.entries()) {
+    const wB = b.get(key);
+    if (wB) overlap += Math.min(wA, wB);
+  }
+  return +overlap.toFixed(2);
+}
+
+/**
+ * Build pairwise overlap rows for every (i,j) i<j pair of funds with holdings data.
+ * Result: array of { fundA, fundB, overlapPercent, sharedCompanies, valueWeight }.
+ * `valueWeight` is the geometric-mean of the two funds' portfolio values — used to
+ * weight the diversification index so big positions count more than small ones.
+ */
+export function computePairwiseOverlap(fundResults) {
+  const withHoldings = fundResults.filter(fr => fr.holdings?.holdings?.length);
+  const pairs = [];
+
+  for (let i = 0; i < withHoldings.length; i++) {
+    for (let j = i + 1; j < withHoldings.length; j++) {
+      const A = withHoldings[i];
+      const B = withHoldings[j];
+      const overlapPercent = computePairOverlap(A.holdings.holdings, B.holdings.holdings);
+      if (overlapPercent <= 0) continue;
+
+      const aMap = buildHoldingsMap(A.holdings.holdings);
+      const bMap = buildHoldingsMap(B.holdings.holdings);
+      const shared = [];
+      for (const [key, wA] of aMap.entries()) {
+        const wB = bMap.get(key);
+        if (wB) {
+          const matched = (A.holdings.holdings || []).find(h => normalizeCompanyKey(h.symbol, h.name) === key);
+          shared.push({ key, name: matched?.name || key, symbol: matched?.symbol || null, weightA: wA, weightB: wB });
+        }
+      }
+      shared.sort((x, y) => Math.min(y.weightA, y.weightB) - Math.min(x.weightA, x.weightB));
+
+      pairs.push({
+        fundA: A.fund.name,
+        fundB: B.fund.name,
+        overlapPercent,
+        sharedCount: shared.length,
+        sharedCompanies: shared,
+        valueWeight: Math.sqrt((A.currentValue || 0) * (B.currentValue || 0)),
+      });
+    }
+  }
+
+  pairs.sort((x, y) => y.overlapPercent - x.overlapPercent);
+  return pairs;
+}
+
+/**
+ * Portfolio-wide diversification index (0-100).
+ *   100 = your funds are completely independent of each other (perfect diversification).
+ *   0   = your funds are clones of each other (overlap dominates).
+ *
+ * Computed as a value-weighted average of pairwise (1 - overlapPct/100), where each pair
+ * is weighted by sqrt(valueA * valueB). Only funds with holdings data participate; funds
+ * without holdings (e.g., direct stocks held alone) get a coverage penalty surfaced
+ * separately in the summary.
+ */
+export function computeDiversificationIndex(fundResults, pairs) {
+  const withHoldings = fundResults.filter(fr => fr.holdings?.holdings?.length);
+  if (withHoldings.length < 2) {
+    return {
+      score: null,
+      label: withHoldings.length === 1 ? 'Only one fund with holdings — overlap not computable' : 'No funds with holdings',
+      pairsAnalyzed: 0,
+      averageOverlap: null,
+      worstPair: null,
+      coveragePercent: null,
+    };
+  }
+
+  let weightedDistance = 0;
+  let weightSum = 0;
+  let overlapSum = 0;
+  let worstPair = null;
+
+  for (const p of pairs) {
+    const w = p.valueWeight || 1;
+    weightedDistance += (1 - p.overlapPercent / 100) * w;
+    weightSum += w;
+    overlapSum += p.overlapPercent;
+    if (!worstPair || p.overlapPercent > worstPair.overlapPercent) worstPair = p;
+  }
+
+  // Pairs that didn't show any overlap contribute a perfect "1" but were filtered out
+  // of `pairs`. Account for them so we don't penalize disjoint portfolios.
+  const totalPossiblePairs = (withHoldings.length * (withHoldings.length - 1)) / 2;
+  const missingPairs = totalPossiblePairs - pairs.length;
+  if (missingPairs > 0) {
+    // Use the average value-weight of analyzed pairs as the proxy weight for each missing pair
+    const avgW = pairs.length ? weightSum / pairs.length : 1;
+    weightedDistance += missingPairs * 1 * avgW;
+    weightSum += missingPairs * avgW;
+  }
+
+  const score = weightSum > 0 ? Math.round((weightedDistance / weightSum) * 100) : 100;
+  const averageOverlap = totalPossiblePairs > 0 ? +(overlapSum / totalPossiblePairs).toFixed(1) : 0;
+
+  let label;
+  if (score >= 80) label = 'Well diversified';
+  else if (score >= 65) label = 'Reasonably diversified';
+  else if (score >= 50) label = 'Some redundancy';
+  else if (score >= 35) label = 'Significant overlap';
+  else label = 'Funds are largely duplicates';
+
+  return {
+    score,
+    label,
+    pairsAnalyzed: pairs.length,
+    totalPossiblePairs,
+    averageOverlap,
+    worstPair,
+    coverageNote: 'Based on top holdings only (~50% of each fund). Full-portfolio overlap requires AMFI disclosures.',
+  };
+}
+
 /**
  * Normalize company key for deduplication.
- * Yahoo returns symbols like "HDFCBANK.NS" or "RELIANCE.BO". 
+ * Yahoo returns symbols like "HDFCBANK.NS" or "RELIANCE.BO".
  * Normalize to just the base symbol for matching.
  */
 function normalizeCompanyKey(symbol, name) {

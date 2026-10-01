@@ -37,8 +37,11 @@ export function DayChange() {
     const typeNames = {
       'mutual_fund': 'Mutual Funds',
       'stock': 'Stocks',
+      'private_share': 'Private Shares',
+      'esop': 'ESOP / RSU',
       'fd': 'Fixed Deposits',
       'ppf': 'PPF',
+      'epf': 'EPF',
       'gold': 'Gold/Silver',
       'other': 'Other'
     };
@@ -232,7 +235,7 @@ export function DayChange() {
               onClick={() => setDayChangeFilter('losers')}
               className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
                 dayChangeFilter === 'losers'
-                  ? 'bg-orange-600 text-white shadow-md'
+                  ? 'bg-red-600 text-white shadow-md'
                   : 'bg-muted hover:bg-muted/80 text-muted-foreground'
               }`}
             >
@@ -244,22 +247,22 @@ export function DayChange() {
 
       {/* Portfolio Day Change Summary */}
       {dashboardData?.portfolio_metrics?.day_change !== undefined && (
-        <AnimatedCard delay={0} className={`border-0 bg-gradient-to-br ${dashboardData.portfolio_metrics.day_change >= 0 ? 'from-emerald-500/10 to-emerald-600/5' : 'from-orange-500/10 to-orange-600/5'} hover:shadow-lg transition-all`}>
+        <AnimatedCard delay={0} className={`border-0 bg-gradient-to-br ${dashboardData.portfolio_metrics.day_change >= 0 ? 'from-emerald-500/10 to-emerald-600/5' : 'from-red-500/10 to-red-600/5'} hover:shadow-lg transition-all`}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-lg font-medium text-muted-foreground">Portfolio Day Change</CardTitle>
-            <div className={`p-2 ${dashboardData.portfolio_metrics.day_change >= 0 ? 'bg-emerald-500/20' : 'bg-orange-500/20'} rounded-lg`}>
+            <div className={`p-2 ${dashboardData.portfolio_metrics.day_change >= 0 ? 'bg-emerald-500/20' : 'bg-red-500/20'} rounded-lg`}>
               {dashboardData.portfolio_metrics.day_change >= 0 ? (
-                <TrendingUp className="h-5 w-5 text-emerald-600" />
+                <TrendingUp className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
               ) : (
-                <TrendingDown className="h-5 w-5 text-orange-600" />
+                <TrendingDown className="h-5 w-5 text-red-600 dark:text-red-400" />
               )}
             </div>
           </CardHeader>
           <CardContent>
-            <div className={`text-4xl font-bold ${dashboardData.portfolio_metrics.day_change >= 0 ? 'text-emerald-600' : 'text-orange-600'}`}>
+            <div className={`text-4xl font-bold ${dashboardData.portfolio_metrics.day_change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
               {hideValues ? '••' : formatCurrency(dashboardData.portfolio_metrics.day_change)}
             </div>
-            <p className={`text-sm mt-2 ${dashboardData.portfolio_metrics.day_change >= 0 ? 'text-emerald-600' : 'text-orange-600'}`}>
+            <p className={`text-sm mt-2 ${dashboardData.portfolio_metrics.day_change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
               {hideValues ? '••' : `${dashboardData.portfolio_metrics.day_change >= 0 ? '+' : ''}${formatNumber(dashboardData.portfolio_metrics.day_change_pct, 2)}%`} today
             </p>
           </CardContent>
@@ -271,9 +274,9 @@ export function DayChange() {
         <div>
           <div className="grid gap-4 md:grid-cols-2">
             {/* Top Gainers */}
-            <Card className="border-emerald-200 bg-gradient-to-br from-emerald-50/50 to-background">
+            <Card className="border-emerald-200 dark:border-emerald-900/40 bg-gradient-to-br from-emerald-50/50 to-background dark:from-emerald-500/10 dark:to-background">
               <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2 text-emerald-700">
+                <CardTitle className="text-lg flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
                   <TrendingUp className="h-5 w-5" />
                   Top Gainers Today
                 </CardTitle>
@@ -285,7 +288,7 @@ export function DayChange() {
                     .sort((a, b) => b.metrics.day_change_pct - a.metrics.day_change_pct)
                     .slice(0, 10)
                     .map(({ fund, metrics }) => (
-                      <div key={fund.id} className="flex items-center justify-between p-3 bg-emerald-50/50 rounded-lg border border-emerald-100">
+                      <div key={fund.id} className="flex items-center justify-between p-3 bg-emerald-50/50 dark:bg-emerald-500/10 rounded-lg border border-emerald-100 dark:border-emerald-900/40">
                         <div className="flex-1">
                           <div className="font-semibold text-sm">{fund.name}</div>
                           <div className="text-xs text-muted-foreground">
@@ -293,10 +296,10 @@ export function DayChange() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className="font-bold text-emerald-600">
+                          <div className="font-bold text-emerald-600 dark:text-emerald-400">
                             {hideValues ? '••' : `+${formatCurrency(metrics.day_change)}`}
                           </div>
-                          <div className="text-xs font-semibold text-emerald-600">
+                          <div className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                             {hideValues ? '••' : `+${formatNumber(metrics.day_change_pct, 2)}%`}
                           </div>
                         </div>
@@ -312,9 +315,9 @@ export function DayChange() {
             </Card>
 
             {/* Top Losers */}
-            <Card className="border-orange-200 bg-gradient-to-br from-orange-50/50 to-background">
+            <Card className="border-red-200 dark:border-red-900/40 bg-gradient-to-br from-red-50/50 to-background dark:from-red-500/10 dark:to-background">
               <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2 text-orange-700">
+                <CardTitle className="text-lg flex items-center gap-2 text-red-700 dark:text-red-300">
                   <TrendingDown className="h-5 w-5" />
                   Top Losers Today
                 </CardTitle>
@@ -326,7 +329,7 @@ export function DayChange() {
                     .sort((a, b) => a.metrics.day_change_pct - b.metrics.day_change_pct)
                     .slice(0, 10)
                     .map(({ fund, metrics }) => (
-                      <div key={fund.id} className="flex items-center justify-between p-3 bg-orange-50/50 rounded-lg border border-orange-100">
+                      <div key={fund.id} className="flex items-center justify-between p-3 bg-red-50/50 dark:bg-red-500/10 rounded-lg border border-red-100 dark:border-red-900/40">
                         <div className="flex-1">
                           <div className="font-semibold text-sm">{fund.name}</div>
                           <div className="text-xs text-muted-foreground">
@@ -334,10 +337,10 @@ export function DayChange() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className="font-bold text-orange-600">
+                          <div className="font-bold text-red-600 dark:text-red-400">
                             {hideValues ? '••' : formatCurrency(metrics.day_change)}
                           </div>
-                          <div className="text-xs font-semibold text-orange-600">
+                          <div className="text-xs font-semibold text-red-600 dark:text-red-400">
                             {hideValues ? '••' : `${formatNumber(metrics.day_change_pct, 2)}%`}
                           </div>
                         </div>
@@ -355,34 +358,34 @@ export function DayChange() {
 
           {/* Day Change Summary Stats */}
           <div className="grid gap-4 md:grid-cols-4 mt-4">
-            <Card className="bg-gradient-to-br from-emerald-50/30 to-background">
+            <Card className="bg-gradient-to-br from-emerald-50/30 to-background dark:from-emerald-500/10 dark:to-background">
               <CardContent className="pt-6">
                 <div className="text-sm text-muted-foreground mb-1">Gainers</div>
-                <div className="text-2xl font-bold text-emerald-600">
+                <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
                   {filteredMetrics.filter(fm => fm.metrics.day_change && fm.metrics.day_change > 0).length}
                 </div>
               </CardContent>
             </Card>
-            <Card className="bg-gradient-to-br from-orange-50/30 to-background">
+            <Card className="bg-gradient-to-br from-red-50/30 to-background dark:from-red-500/10 dark:to-background">
               <CardContent className="pt-6">
                 <div className="text-sm text-muted-foreground mb-1">Losers</div>
-                <div className="text-2xl font-bold text-orange-600">
+                <div className="text-2xl font-bold text-red-600 dark:text-red-400">
                   {filteredMetrics.filter(fm => fm.metrics.day_change && fm.metrics.day_change < 0).length}
                 </div>
               </CardContent>
             </Card>
-            <Card className="bg-gradient-to-br from-blue-50/30 to-background">
+            <Card className="bg-gradient-to-br from-blue-50/30 to-background dark:from-blue-500/10 dark:to-background">
               <CardContent className="pt-6">
                 <div className="text-sm text-muted-foreground mb-1">Unchanged</div>
-                <div className="text-2xl font-bold text-blue-600">
+                <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
                   {filteredMetrics.filter(fm => fm.metrics.day_change === 0).length}
                 </div>
               </CardContent>
             </Card>
-            <Card className="bg-gradient-to-br from-gray-50/30 to-background">
+            <Card className="bg-gradient-to-br from-gray-50/30 to-background dark:from-gray-500/10 dark:to-background">
               <CardContent className="pt-6">
                 <div className="text-sm text-muted-foreground mb-1">No Data</div>
-                <div className="text-2xl font-bold text-gray-600">
+                <div className="text-2xl font-bold text-gray-600 dark:text-gray-400">
                   {filteredMetrics.filter(fm => fm.metrics.day_change === null).length}
                 </div>
               </CardContent>

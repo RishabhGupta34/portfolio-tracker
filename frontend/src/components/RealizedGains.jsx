@@ -83,8 +83,11 @@ export function RealizedGains() {
     const typeNames = {
       'mutual_fund': 'Mutual Funds',
       'stock': 'Stocks',
+      'private_share': 'Private Shares',
+      'esop': 'ESOP / RSU',
       'fd': 'Fixed Deposits',
       'ppf': 'PPF',
+      'epf': 'EPF',
       'gold': 'Gold/Silver',
       'other': 'Other'
     };
@@ -195,10 +198,13 @@ export function RealizedGains() {
         total_realized_gain: sum.total_realized_gain + f.total_realized_gain,
         total_sold_amount: sum.total_sold_amount + f.total_sold_amount,
         total_cost_basis: sum.total_cost_basis + f.total_cost_basis,
+        stcg: sum.stcg + (f.stcg || 0),
+        ltcg: sum.ltcg + (f.ltcg || 0),
+        slab: sum.slab + (f.slab || 0),
         transaction_count: sum.transaction_count + f.transactions.length
-      }), { total_realized_gain: 0, total_sold_amount: 0, total_cost_basis: 0, transaction_count: 0 });
+      }), { total_realized_gain: 0, total_sold_amount: 0, total_cost_basis: 0, stcg: 0, ltcg: 0, slab: 0, transaction_count: 0 });
 
-      const gain_pct = groupMetrics.total_cost_basis > 0 
+      const gain_pct = groupMetrics.total_cost_basis > 0
         ? (groupMetrics.total_realized_gain / groupMetrics.total_cost_basis * 100)
         : 0;
 
@@ -208,6 +214,9 @@ export function RealizedGains() {
         total_realized_gain: groupMetrics.total_realized_gain,
         total_sold_amount: groupMetrics.total_sold_amount,
         total_cost_basis: groupMetrics.total_cost_basis,
+        stcg: groupMetrics.stcg,
+        ltcg: groupMetrics.ltcg,
+        slab: groupMetrics.slab,
         gain_pct: gain_pct,
         transactions: group.accounts.flatMap(f => f.transactions)
       };
@@ -316,11 +325,14 @@ export function RealizedGains() {
           <p className="text-sm text-muted-foreground mt-1">Track profits from sold investments</p>
         </div>
         <AnimatedCard className="border-2">
-          <div className="flex flex-col items-center justify-center py-12">
+          <div className="flex flex-col items-center justify-center py-12 px-6">
             <DollarSign className="h-12 w-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No Realized Gains Yet</h3>
-            <p className="text-sm text-muted-foreground text-center">
-              Sell some investments to see your realized profits/losses here
+            <p className="text-sm text-muted-foreground text-center max-w-md">
+              This page aggregates every sell transaction in your portfolio (FIFO across full history) — no time window filter.
+            </p>
+            <p className="text-xs text-muted-foreground text-center mt-3 max-w-md">
+              If you've sold in the past but see nothing here, the fund record may have been deleted (which removes its transaction history). Add the sell transactions back in the Investments tab to restore the realized history.
             </p>
           </div>
         </AnimatedCard>
@@ -411,6 +423,41 @@ export function RealizedGains() {
           </div>
         </div>
       </div>
+
+      {/* Tax Breakdown Card */}
+      {(summary.stcg !== 0 || summary.ltcg !== 0 || summary.slab !== 0) && (
+        <AnimatedCard className="border-2 hover:shadow-lg transition-shadow">
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-medium text-muted-foreground">Tax breakdown (FIFO, indicative)</span>
+              <span className="text-xs text-muted-foreground italic">Verify with a CA before filing</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40">
+                <div className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-1">SHORT-TERM (STCG)</div>
+                <div className="text-2xl font-bold text-amber-800 dark:text-amber-300">
+                  {hideValues ? '••••••' : formatCurrency(summary.stcg || 0)}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">Equity &lt; 1Y · 20% (post Jul-2024)</div>
+              </div>
+              <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/40">
+                <div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 mb-1">LONG-TERM (LTCG)</div>
+                <div className="text-2xl font-bold text-emerald-800 dark:text-emerald-300">
+                  {hideValues ? '••••••' : formatCurrency(summary.ltcg || 0)}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">Equity ≥ 1Y · 12.5% over ₹1.25L exempt</div>
+              </div>
+              <div className="p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800/40">
+                <div className="text-xs font-semibold text-purple-700 dark:text-purple-400 mb-1">SLAB-RATED</div>
+                <div className="text-2xl font-bold text-purple-800 dark:text-purple-300">
+                  {hideValues ? '••••••' : formatCurrency(summary.slab || 0)}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">FD interest, debt MFs (post Apr-2023)</div>
+              </div>
+            </div>
+          </div>
+        </AnimatedCard>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -615,6 +662,25 @@ export function RealizedGains() {
                                   <div className={`text-xs font-semibold mt-0.5 ${isAccountPositive ? 'text-green-600' : 'text-red-600'}`}>
                                     {hideValues ? '••' : `${isAccountPositive ? '+' : ''}${formatNumber(accountFund.gain_pct, 2)}%`}
                                   </div>
+                                  {(accountFund.stcg || accountFund.ltcg || accountFund.slab) ? (
+                                    <div className="flex flex-wrap gap-1 mt-2">
+                                      {accountFund.stcg ? (
+                                        <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] font-medium">
+                                          STCG: {hideValues ? '••' : formatCurrency(accountFund.stcg)}
+                                        </span>
+                                      ) : null}
+                                      {accountFund.ltcg ? (
+                                        <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] font-medium">
+                                          LTCG: {hideValues ? '••' : formatCurrency(accountFund.ltcg)}
+                                        </span>
+                                      ) : null}
+                                      {accountFund.slab ? (
+                                        <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 text-[10px] font-medium">
+                                          Slab: {hideValues ? '••' : formatCurrency(accountFund.slab)}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
                                 </div>
                                 <div className="p-3 bg-background/60 rounded-lg border border-muted/50">
                                   <div className="text-xs font-medium text-muted-foreground mb-1.5">Sold Amount</div>
@@ -643,24 +709,49 @@ export function RealizedGains() {
                                         <th className="text-right p-2">Cost Basis</th>
                                         <th className="text-right p-2">Gain/Loss</th>
                                         <th className="text-right p-2">%</th>
+                                        <th className="text-right p-2">Tax</th>
                                       </tr>
                                     </thead>
                                     <tbody>
-                                      {accountFund.transactions.map((txn, index) => (
-                                        <tr key={index} className="border-b hover:bg-muted/50">
-                                          <td className="p-2">{formatDate(txn.date)}</td>
-                                          <td className="text-right p-2">{txn.units.toFixed(4)}</td>
-                                          <td className="text-right p-2">₹{txn.sell_nav.toFixed(2)}</td>
-                                          <td className="text-right p-2">{hideValues ? '••••••' : formatCurrency(txn.sell_amount)}</td>
-                                          <td className="text-right p-2">{hideValues ? '••••••' : formatCurrency(txn.cost_basis)}</td>
-                                          <td className={`text-right p-2 font-semibold ${txn.realized_gain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                            {hideValues ? '••••••' : formatCurrency(txn.realized_gain)}
-                                          </td>
-                                          <td className={`text-right p-2 ${txn.gain_pct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                            {hideValues ? '••' : `${txn.gain_pct >= 0 ? '+' : ''}${txn.gain_pct.toFixed(2)}%`}
-                                          </td>
-                                        </tr>
-                                      ))}
+                                      {accountFund.transactions.map((txn, index) => {
+                                        const taxParts = [];
+                                        if (txn.stcg) taxParts.push({ label: 'STCG', value: txn.stcg, cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' });
+                                        if (txn.ltcg) taxParts.push({ label: 'LTCG', value: txn.ltcg, cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' });
+                                        if (txn.slab) taxParts.push({ label: 'Slab', value: txn.slab, cls: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' });
+                                        return (
+                                          <tr key={index} className="border-b hover:bg-muted/50">
+                                            <td className="p-2">
+                                              <div>{formatDate(txn.date)}</div>
+                                              {txn.fd_broken && (
+                                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 font-medium">Broken FD</span>
+                                              )}
+                                            </td>
+                                            <td className="text-right p-2">{txn.fd_broken ? '—' : txn.units.toFixed(4)}</td>
+                                            <td className="text-right p-2">{txn.fd_broken ? '—' : `₹${txn.sell_nav.toFixed(2)}`}</td>
+                                            <td className="text-right p-2">{hideValues ? '••••••' : formatCurrency(txn.sell_amount)}</td>
+                                            <td className="text-right p-2">{hideValues ? '••••••' : formatCurrency(txn.cost_basis)}</td>
+                                            <td className={`text-right p-2 font-semibold ${txn.realized_gain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                              {hideValues ? '••••••' : formatCurrency(txn.realized_gain)}
+                                            </td>
+                                            <td className={`text-right p-2 ${txn.gain_pct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                              <div>{hideValues ? '••' : `${txn.gain_pct >= 0 ? '+' : ''}${txn.gain_pct.toFixed(2)}%`}</div>
+                                              {txn.fd_broken && txn.effective_annual_pct != null && !hideValues && (
+                                                <div className="text-[10px] text-muted-foreground">{txn.effective_annual_pct.toFixed(2)}% p.a.</div>
+                                              )}
+                                            </td>
+                                            <td className="text-right p-2">
+                                              <div className="flex flex-wrap gap-1 justify-end">
+                                                {taxParts.length === 0 && <span className="text-xs text-muted-foreground">—</span>}
+                                                {taxParts.map(p => (
+                                                  <span key={p.label} className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${p.cls}`}>
+                                                    {p.label}: {hideValues ? '••' : formatCurrency(p.value)}
+                                                  </span>
+                                                ))}
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
                                     </tbody>
                                   </table>
                                 </div>

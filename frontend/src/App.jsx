@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { Accounts } from './components/Accounts';
 import { Investments } from './components/Investments';
@@ -10,6 +10,8 @@ import { FundInsights } from './components/FundInsights';
 import { PortfolioXRay } from './components/PortfolioXRay';
 import { ThemeToggle } from './components/ThemeToggle';
 import { RefreshPortfolio } from './components/RefreshPortfolio';
+import { QuickAddTransaction } from './components/QuickAddTransaction';
+import { ExportReport } from './components/ExportReport';
 import { Toaster } from './components/ui/Toast';
 import { InstallPrompt } from './components/InstallPrompt';
 import { AutoRefreshNAV } from './components/AutoRefreshNAV';
@@ -18,6 +20,15 @@ import { cn } from './lib/utils';
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
+
+  // Allow Dashboard summary cards to deep-link into Insights/X-Ray tabs.
+  useEffect(() => {
+    const handler = (e) => {
+      if (e?.detail?.tab) setActiveTab(e.detail.tab);
+    };
+    window.addEventListener('navigate-tab', handler);
+    return () => window.removeEventListener('navigate-tab', handler);
+  }, []);
 
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -42,6 +53,8 @@ function App() {
               </h1>
             </div>
             <div className="flex items-center gap-2">
+              <QuickAddTransaction />
+              <ExportReport />
               <RefreshPortfolio />
               <ThemeToggle />
             </div>
@@ -49,23 +62,24 @@ function App() {
         </header>
 
         {/* Navigation */}
-      <nav className="border-b bg-card">
+      <nav className="border-b bg-card/80 backdrop-blur sticky top-16 z-40">
         <div className="container mx-auto px-4">
-          <div className="flex gap-1">
+          <div className="flex gap-1 overflow-x-auto scrollbar-thin -mx-1 px-1">
             {tabs.map((tab) => {
               const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
                   className={cn(
-                    'flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2',
-                    activeTab === tab.id
+                    'flex shrink-0 items-center gap-2 px-4 py-3 text-sm font-medium transition-all border-b-2 whitespace-nowrap',
+                    isActive
                       ? 'border-primary text-primary'
                       : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted'
                   )}
                 >
-                  <Icon className="h-4 w-4" />
+                  <Icon className={cn('h-4 w-4 transition-transform', isActive && 'scale-110')} />
                   {tab.label}
                 </button>
               );
@@ -88,11 +102,10 @@ function App() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t bg-card mt-12">
-        <div className="container mx-auto px-4 py-6">
-          <div className="text-center text-sm text-muted-foreground">
-            <p>All data is stored locally on your machine. No external API calls are made.</p>
-            <p className="mt-1">Built with React, TailwindCSS, and FastAPI</p>
+      <footer className="border-t bg-card/60 mt-12">
+        <div className="container mx-auto px-4 py-5">
+          <div className="text-center text-xs text-muted-foreground">
+            All data stays on your device. No accounts, no servers, no tracking.
           </div>
         </div>
       </footer>

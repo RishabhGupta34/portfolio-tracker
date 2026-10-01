@@ -4,13 +4,14 @@ import { Card, CardContent } from './ui/Card';
 import { formatCurrency } from '../lib/utils';
 import {
   getFundHoldings, getETFHoldings, aggregatePortfolioHoldings,
+  computePairwiseOverlap, computeDiversificationIndex,
   saveXRayCache, loadXRayCache, clearXRayCache,
   ensureYahooCrumb, getISIN, getYahooSymbol, fetchFundData,
 } from '../lib/holdingsAnalysis';
 import {
   ChevronDown, ChevronUp, RefreshCw, PieChart, Building2, Layers,
   AlertTriangle, Star, Eye, EyeOff,
-  Search, X, BarChart3,
+  Search, X, BarChart3, Shuffle,
 } from 'lucide-react';
 import { Skeleton } from './ui/Skeleton';
 import { toast } from './ui/Toast';
@@ -180,6 +181,10 @@ export function PortfolioXRay() {
     }
 
     const aggregated = aggregatePortfolioHoldings(fundResults);
+    const pairwise = computePairwiseOverlap(fundResults);
+    const diversification = computeDiversificationIndex(fundResults, pairwise);
+    aggregated.pairwise = pairwise;
+    aggregated.diversification = diversification;
     setXrayData(aggregated);
     setFundDetails(details);
     setFailedFunds(failed);
@@ -308,11 +313,18 @@ export function PortfolioXRay() {
       {/* Summary cards */}
       {xrayData && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <SummaryCard icon={Building2} label="Companies" value={xrayData.summary.totalCompanies} color="blue" />
             <SummaryCard icon={PieChart} label="Sectors" value={xrayData.summary.totalSectors} color="purple" />
             <SummaryCard icon={Layers} label="Overlapping" value={xrayData.summary.overlappingCompanies}
               sub="in 2+ funds" color="amber" />
+            <SummaryCard
+              icon={Shuffle}
+              label="Diversification"
+              value={xrayData.diversification?.score != null ? `${xrayData.diversification.score}/100` : '—'}
+              sub={xrayData.diversification?.label}
+              color={xrayData.diversification?.score >= 65 ? 'green' : xrayData.diversification?.score >= 50 ? 'amber' : 'red'}
+            />
             <SummaryCard icon={BarChart3} label="Coverage" value={`${xrayData.summary.coveragePercent}%`}
               sub={`of ₹${formatCurrency(xrayData.summary.totalPortfolioValue)} analyzed`} color="green" />
           </div>
@@ -367,7 +379,13 @@ export function PortfolioXRay() {
               displayValue={displayValue} hideValues={hideValues} />
           )}
           {activeTab === 'overlap' && (
-            <OverlapTab overlapping={xrayData.overlapping} displayValue={displayValue} hideValues={hideValues} />
+            <OverlapTab
+              overlapping={xrayData.overlapping}
+              pairwise={xrayData.pairwise || []}
+              diversification={xrayData.diversification}
+              displayValue={displayValue}
+              hideValues={hideValues}
+            />
           )}
           {activeTab === 'funds' && (
             <FundsTab funds={activeFunds} fundDetails={fundDetails}
@@ -390,6 +408,7 @@ function SummaryCard({ icon: Icon, label, value, sub, color }) {
     purple: 'bg-purple-50 text-purple-600 dark:bg-purple-950 dark:text-purple-400',
     amber: 'bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-400',
     green: 'bg-green-50 text-green-600 dark:bg-green-950 dark:text-green-400',
+    red: 'bg-red-50 text-red-600 dark:bg-red-950 dark:text-red-400',
   };
 
   return (
@@ -604,8 +623,12 @@ function SectorsTab({ sectors, totalValue, displayValue, hideValues }) {
 // Overlap Tab
 // ============================================================
 
-function OverlapTab({ overlapping, displayValue, hideValues }) {
-  if (overlapping.length === 0) {
+function OverlapTab({ overlapping, pairwise, diversification, displayValue, hideValues }) {
+  const [expandedPair, setExpandedPair] = useState(null);
+  const hasOverlap = overlapping.length > 0;
+  const hasPairs = pairwise && pairwise.length > 0;
+
+  if (!hasOverlap && !hasPairs) {
     return (
       <Card>
         <CardContent className="p-8 text-center text-muted-foreground">
@@ -616,49 +639,156 @@ function OverlapTab({ overlapping, displayValue, hideValues }) {
     );
   }
 
+  const divScore = diversification?.score;
+  const divColor = divScore == null ? 'gray' : divScore >= 65 ? 'green' : divScore >= 50 ? 'amber' : 'red';
+  const divBg = {
+    green: 'border-green-200 bg-green-50 dark:bg-green-950 dark:border-green-800',
+    amber: 'border-amber-200 bg-amber-50 dark:bg-amber-950 dark:border-amber-800',
+    red: 'border-red-200 bg-red-50 dark:bg-red-950 dark:border-red-800',
+    gray: 'border-border bg-muted/40',
+  }[divColor];
+  const divText = {
+    green: 'text-green-600 dark:text-green-400',
+    amber: 'text-amber-600 dark:text-amber-400',
+    red: 'text-red-600 dark:text-red-400',
+    gray: 'text-muted-foreground',
+  }[divColor];
+
+  const redundantPairs = pairwise.filter(p => p.overlapPercent >= 60);
+
   return (
     <div className="space-y-3">
-      <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950 dark:border-amber-800">
-        <CardContent className="p-3">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
-            <div className="text-xs">
-              <span className="font-semibold">{overlapping.length} companies</span> appear in 2 or more of your funds.
-              High overlap means less diversification.
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <div className="space-y-1.5">
-        {overlapping.map(c => (
-          <Card key={c.symbol || c.name}>
-            <CardContent className="p-3">
-              <div className="flex items-center justify-between mb-1.5">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm">{c.name}</span>
-                  {c.symbol && (
-                    <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                      {c.symbol.replace('.NS', '').replace('.BO', '')}
-                    </span>
+      {diversification && (
+        <Card className={divBg}>
+          <CardContent className="p-4">
+            <div className="flex items-start gap-3">
+              <Shuffle className={`h-5 w-5 mt-0.5 shrink-0 ${divText}`} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                  <div>
+                    <div className="text-xs text-muted-foreground">Diversification Score</div>
+                    <div className={`text-2xl font-bold ${divText}`}>
+                      {divScore != null ? `${divScore}/100` : '—'}
+                      <span className="ml-2 text-sm font-medium">{diversification.label}</span>
+                    </div>
+                  </div>
+                  {diversification.averageOverlap != null && (
+                    <div className="text-xs text-right text-muted-foreground">
+                      Avg pair overlap: <span className="font-medium">{diversification.averageOverlap}%</span><br/>
+                      {diversification.pairsAnalyzed}/{diversification.totalPossiblePairs} pairs analyzed
+                    </div>
                   )}
                 </div>
-                <div className="text-right">
-                  <span className="text-sm font-semibold">{c.portfolioPercent}%</span>
-                  <span className="text-xs text-muted-foreground ml-2">{displayValue(c.totalValue)}</span>
-                </div>
+                {diversification.coverageNote && (
+                  <div className="mt-2 text-[11px] text-muted-foreground italic">
+                    {diversification.coverageNote}
+                  </div>
+                )}
               </div>
-              <div className="flex flex-wrap gap-1">
-                {c.funds.map(f => (
-                  <span key={f} className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
-                    {f}
-                  </span>
-                ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {redundantPairs.length > 0 && (
+        <Card className="border-red-200 bg-red-50 dark:bg-red-950 dark:border-red-800">
+          <CardContent className="p-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+              <div className="text-xs">
+                <span className="font-semibold">{redundantPairs.length} fund pair{redundantPairs.length > 1 ? 's' : ''}</span>
+                {' '}share more than 60% of holdings. Consider whether holding both adds diversification or just complexity.
               </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {hasPairs && (
+        <div>
+          <h3 className="text-sm font-semibold mb-2 px-1">Fund-pair overlap</h3>
+          <div className="space-y-1.5">
+            {pairwise.map((p, idx) => {
+              const key = `${p.fundA}|${p.fundB}`;
+              const isExpanded = expandedPair === key;
+              const tone = p.overlapPercent >= 60 ? 'text-red-600' : p.overlapPercent >= 35 ? 'text-amber-600' : 'text-green-600';
+              return (
+                <Card key={key}>
+                  <button
+                    onClick={() => setExpandedPair(isExpanded ? null : key)}
+                    className="w-full p-3 text-left hover:bg-muted/40 transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-muted-foreground">vs.</div>
+                        <div className="text-sm font-medium truncate">{p.fundA}</div>
+                        <div className="text-sm font-medium truncate">{p.fundB}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className={`text-lg font-bold ${tone}`}>{p.overlapPercent}%</div>
+                        <div className="text-[11px] text-muted-foreground">{p.sharedCount} shared</div>
+                      </div>
+                      {isExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    </div>
+                  </button>
+                  {isExpanded && (
+                    <div className="border-t px-3 py-2 bg-muted/20 space-y-1">
+                      {p.sharedCompanies.slice(0, 15).map(s => (
+                        <div key={s.key} className="flex items-center justify-between text-xs">
+                          <span className="truncate flex-1">{s.name}</span>
+                          <span className="text-muted-foreground shrink-0 ml-2">
+                            {s.weightA.toFixed(1)}% / {s.weightB.toFixed(1)}%
+                          </span>
+                        </div>
+                      ))}
+                      {p.sharedCompanies.length > 15 && (
+                        <div className="text-[11px] text-muted-foreground italic">
+                          +{p.sharedCompanies.length - 15} more shared holdings
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {hasOverlap && (
+        <div>
+          <h3 className="text-sm font-semibold mb-2 px-1">Companies in 2+ funds</h3>
+          <div className="space-y-1.5">
+            {overlapping.map(c => (
+              <Card key={c.symbol || c.name}>
+                <CardContent className="p-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm">{c.name}</span>
+                      {c.symbol && (
+                        <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                          {c.symbol.replace('.NS', '').replace('.BO', '')}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <span className="text-sm font-semibold">{c.portfolioPercent}%</span>
+                      <span className="text-xs text-muted-foreground ml-2">{displayValue(c.totalValue)}</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {c.funds.map(f => (
+                      <span key={f} className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
+                        {f}
+                      </span>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

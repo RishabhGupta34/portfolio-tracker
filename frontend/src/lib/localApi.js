@@ -113,6 +113,13 @@ export const localApi = {
       start_date: data.start_date || null,
       maturity_value: null,
       ppf_account_number: data.ppf_account_number || null,
+      // ESOP / RSU grant-level
+      esop_grant_type: data.esop_grant_type || null,         // "esop" | "rsu"
+      esop_company: data.esop_company || null,
+      esop_currency: data.esop_currency || null,             // "USD" / "INR" / ...
+      esop_grant_date: data.esop_grant_date || null,
+      esop_total_units: data.esop_total_units || null,
+      esop_vesting_schedule: data.esop_vesting_schedule || null,
     };
 
     portfolio.funds.push(newFund);
@@ -190,6 +197,22 @@ export const localApi = {
       transaction_type: data.transaction_type,
       split_ratio: data.split_ratio || null,
       notes: data.notes || null,
+      // ─── ESOP / RSU fields ─────────────────────────
+      // All monetary values stored in INR (frontend converts before send).
+      // Original currency + amounts are preserved for audit/edit.
+      strike_price: data.strike_price ?? null,
+      fmv: data.fmv ?? null,
+      perquisite_tax: data.perquisite_tax ?? null,
+      original_currency: data.original_currency || null,
+      original_nav: data.original_nav ?? null,
+      original_strike_price: data.original_strike_price ?? null,
+      original_fmv: data.original_fmv ?? null,
+      fx_rate: data.fx_rate ?? null,
+      fx_rate_source: data.fx_rate_source || null,
+      estimated_price: data.estimated_price ?? null,
+      original_estimated_price: data.original_estimated_price ?? null,
+      tax_input_type: data.tax_input_type ?? null,
+      tax_input_value: data.tax_input_value ?? null,
     };
 
     fund.transactions.push(newTransaction);
@@ -218,6 +241,44 @@ export const localApi = {
     portfolio.funds = portfolio.funds.filter(f => f.id !== fundId);
     await savePortfolio(portfolio);
     return { message: 'Investment deleted successfully' };
+  },
+
+  async setManualNav(fundId, value) {
+    const portfolio = await getPortfolio();
+    const fund = portfolio.funds.find(f => f.id === fundId);
+    if (!fund) {
+      throw new Error('Fund not found');
+    }
+    fund.previous_nav = fund.current_nav != null ? fund.current_nav : value;
+    fund.current_nav = value;
+    fund.nav_updated_at = new Date().toISOString();
+    await savePortfolio(portfolio);
+    return { current_nav: value, nav_updated_at: fund.nav_updated_at };
+  },
+
+  async updateFund(fundId, data) {
+    const portfolio = await getPortfolio();
+    const fund = portfolio.funds.find(f => f.id === fundId);
+    if (!fund) {
+      throw new Error('Fund not found');
+    }
+    if (data.account_id !== undefined && !portfolio.accounts.find(a => a.id === data.account_id)) {
+      throw new Error('Account not found');
+    }
+    const editable = [
+      'name', 'account_id', 'scheme_code', 'symbol', 'interest_rate',
+      'maturity_date', 'bank', 'principal', 'start_date', 'ppf_account_number',
+      // ESOP / RSU grant-level
+      'esop_grant_type', 'esop_company', 'esop_currency',
+      'esop_grant_date', 'esop_total_units', 'esop_vesting_schedule',
+    ];
+    for (const key of editable) {
+      if (data[key] !== undefined) {
+        fund[key] = data[key];
+      }
+    }
+    await savePortfolio(portfolio);
+    return fund;
   },
 
   // Portfolio metrics
@@ -708,42 +769,162 @@ export const localApi = {
     let totalRealizedGain = 0;
     let totalSoldAmount = 0;
     let totalCostBasis = 0;
+    const totalsByCategory = { stcg: 0, ltcg: 0, slab: 0 };
+
+    // Indian tax-law holding-period thresholds (in days) for LTCG eligibility.
+    // - Equity (listed shares, equity-oriented MFs): 12 months = LTCG
+    // - Unlisted shares, gold, real estate: 24 months
+    // - Debt MFs purchased after 2023-04-01: always slab-rated, no LTCG
+    const DEBT_SLAB_DATE = '2023-04-01';
+    function classify(fundType, buyDate, sellDate) {
+      const daysHeld = (new Date(sellDate) - new Date(buyDate)) / (1000 * 60 * 60 * 24);
+      if (fundType === 'mutual_fund' || fundType === 'stock') {
+        return daysHeld >= 365 ? 'ltcg' : 'stcg';
+      }
+      if (fundType === 'private_share' || fundType === 'esop' || fundType === 'gold') {
+        return daysHeld >= 730 ? 'ltcg' : 'stcg';
+      }
+      if (fundType === 'fd' || fundType === 'ppf' || fundType === 'epf') {
+        return 'slab';
+      }
+      // Unknown / 'other': fall back to equity rule.
+      return daysHeld >= 365 ? 'ltcg' : 'stcg';
+    }
+
+    // Broken FDs: treat as a special realized gain entry (principal=cost, actual_amount=proceeds)
+    for (const fund of portfolio.funds) {
+      if (fund.type === 'fd' && fund.fd_broken && fund.fd_broken_amount != null && fund.principal) {
+        const principal = fund.principal;
+        const actualAmount = fund.fd_broken_amount;
+        const interest = actualAmount - principal;
+        const gainPct = (interest / principal) * 100;
+        const daysHeld = fund.start_date && fund.fd_broken_date
+          ? Math.floor((new Date(fund.fd_broken_date) - new Date(fund.start_date)) / (1000 * 60 * 60 * 24))
+          : 0;
+        const effectivePct = daysHeld > 0 && principal > 0
+          ? ((interest / principal) / (daysHeld / 365)) * 100
+          : gainPct;
+
+        const fdRealizedGain = {
+          date: fund.fd_broken_date,
+          units: 1,
+          sell_nav: actualAmount,
+          sell_amount: actualAmount,
+          cost_basis: principal,
+          realized_gain: interest,
+          gain_pct: Math.round(gainPct * 100) / 100,
+          stcg: 0,
+          ltcg: 0,
+          slab: interest,
+          lots: [],
+          fd_broken: true,
+          days_held: daysHeld,
+          effective_annual_pct: Math.round(effectivePct * 100) / 100,
+        };
+
+        totalRealizedGain += interest;
+        totalSoldAmount += actualAmount;
+        totalCostBasis += principal;
+        totalsByCategory.slab += interest;
+
+        realizedGains.push({
+          fund_id: fund.id,
+          fund_name: fund.name + ' (Broken FD)',
+          fund_type: fund.type,
+          account_id: fund.account_id,
+          transactions: [fdRealizedGain],
+          total_realized_gain: Math.round(interest * 100) / 100,
+          total_sold_amount: Math.round(actualAmount * 100) / 100,
+          total_cost_basis: Math.round(principal * 100) / 100,
+          gain_pct: Math.round(gainPct * 100) / 100,
+          stcg: 0,
+          ltcg: 0,
+          slab: Math.round(interest * 100) / 100,
+        });
+        continue;
+      }
+    }
 
     for (const fund of portfolio.funds) {
+      if (fund.type === 'fd' && fund.fd_broken) continue; // already handled above
+
       const buyQueue = [];
       const fundRealizedGains = [];
+      const fundCategoryTotals = { stcg: 0, ltcg: 0, slab: 0 };
+      const isEsop = fund.type === 'esop';
 
       for (const txn of [...fund.transactions].sort((a, b) => a.date.localeCompare(b.date))) {
         if (txn.transaction_type === 'buy' || txn.transaction_type === 'bonus') {
+          // Bonus rows have amount=0; their cost basis is zero in Indian tax law (gains
+          // on bonus shares = full sale price). Holding period is from the bonus date.
+          //
+          // ESOP/RSU: Indian tax law treats (FMV at vest - strike) as perquisite income,
+          // already taxed at slab. So when you SELL, your cost basis = FMV at vest, and
+          // the capital gain is (sell - FMV at vest). The perquisite tax you already paid
+          // is NOT in the cost basis for capital-gains purposes — it was income tax, not
+          // an acquisition cost.
+          let costBasisAmount = txn.amount;
+          if (isEsop && (txn.fmv != null || txn.strike_price != null)) {
+            // Cost basis for CG = FMV at vest × units. If FMV missing, fall back to nav (which
+            // for RSUs we record AS the FMV).
+            const fmvPerUnit = txn.fmv ?? txn.nav ?? 0;
+            costBasisAmount = fmvPerUnit * (txn.units || 0);
+          }
           buyQueue.push({
             units: txn.units,
             nav: txn.nav,
             date: txn.date,
-            amount: txn.amount,
+            amount: costBasisAmount,
+            is_bonus: txn.transaction_type === 'bonus',
           });
         } else if (txn.transaction_type === 'sell') {
           let remainingUnits = txn.units;
           let costBasis = 0;
+          const lots = [];
 
           while (remainingUnits > 0 && buyQueue.length > 0) {
             const oldestBuy = buyQueue[0];
+            const sellPricePerUnit = txn.units > 0 ? txn.amount / txn.units : 0;
 
+            let lotUnits;
+            let lotCost;
             if (oldestBuy.units <= remainingUnits) {
-              costBasis += oldestBuy.amount;
-              remainingUnits -= oldestBuy.units;
+              lotUnits = oldestBuy.units;
+              lotCost = oldestBuy.amount;
               buyQueue.shift();
             } else {
               const proportion = remainingUnits / oldestBuy.units;
-              costBasis += oldestBuy.amount * proportion;
+              lotUnits = remainingUnits;
+              lotCost = oldestBuy.amount * proportion;
               oldestBuy.units -= remainingUnits;
-              oldestBuy.amount -= oldestBuy.amount * proportion;
-              remainingUnits = 0;
+              oldestBuy.amount -= lotCost;
             }
+
+            const lotSellAmount = lotUnits * sellPricePerUnit;
+            const lotGain = lotSellAmount - lotCost;
+            const category = classify(fund.type, oldestBuy.date, txn.date);
+            lots.push({
+              buy_date: oldestBuy.date,
+              units: lotUnits,
+              cost_basis: lotCost,
+              sell_amount: lotSellAmount,
+              realized_gain: lotGain,
+              tax_category: category,
+              days_held: Math.round((new Date(txn.date) - new Date(oldestBuy.date)) / (1000 * 60 * 60 * 24)),
+            });
+
+            costBasis += lotCost;
+            remainingUnits -= lotUnits;
+            fundCategoryTotals[category] += lotGain;
+            totalsByCategory[category] += lotGain;
           }
 
           const sellAmount = txn.amount;
           const realizedGain = sellAmount - costBasis;
           const gainPct = costBasis > 0 ? (realizedGain / costBasis) * 100 : 0;
+          const stcgGain = lots.filter(l => l.tax_category === 'stcg').reduce((s, l) => s + l.realized_gain, 0);
+          const ltcgGain = lots.filter(l => l.tax_category === 'ltcg').reduce((s, l) => s + l.realized_gain, 0);
+          const slabGain = lots.filter(l => l.tax_category === 'slab').reduce((s, l) => s + l.realized_gain, 0);
 
           fundRealizedGains.push({
             date: txn.date,
@@ -753,6 +934,10 @@ export const localApi = {
             cost_basis: costBasis,
             realized_gain: realizedGain,
             gain_pct: gainPct,
+            stcg: stcgGain,
+            ltcg: ltcgGain,
+            slab: slabGain,
+            lots,
           });
 
           totalRealizedGain += realizedGain;
@@ -776,6 +961,9 @@ export const localApi = {
           total_sold_amount: Math.round(fundTotalSold * 100) / 100,
           total_cost_basis: Math.round(fundTotalCost * 100) / 100,
           gain_pct: fundTotalCost > 0 ? Math.round((fundTotalGain / fundTotalCost) * 100 * 100) / 100 : 0,
+          stcg: Math.round(fundCategoryTotals.stcg * 100) / 100,
+          ltcg: Math.round(fundCategoryTotals.ltcg * 100) / 100,
+          slab: Math.round(fundCategoryTotals.slab * 100) / 100,
         });
       }
     }
@@ -789,6 +977,9 @@ export const localApi = {
         total_cost_basis: Math.round(totalCostBasis * 100) / 100,
         overall_gain_pct: totalCostBasis > 0 ? Math.round((totalRealizedGain / totalCostBasis) * 100 * 100) / 100 : 0,
         funds_with_sales: realizedGains.length,
+        stcg: Math.round(totalsByCategory.stcg * 100) / 100,
+        ltcg: Math.round(totalsByCategory.ltcg * 100) / 100,
+        slab: Math.round(totalsByCategory.slab * 100) / 100,
       },
       funds: realizedGains,
     };
@@ -902,6 +1093,34 @@ export const localApi = {
       tenure_years: Math.round(years * 100) / 100,
       interest_earned: Math.round(interest * 100) / 100,
       maturity_value: Math.round(maturityValue * 100) / 100,
+    };
+  },
+
+  async breakFd(fundId, { breakDate, actualAmount }) {
+    const portfolio = await getPortfolio();
+    const fund = portfolio.funds.find(f => f.id === fundId);
+    if (!fund) throw new Error('Fund not found');
+    if (fund.type !== 'fd') throw new Error('Only FD type can be broken');
+    if (!fund.principal) throw new Error('FD principal not set');
+
+    fund.fd_broken = true;
+    fund.fd_broken_date = breakDate;
+    fund.fd_broken_amount = actualAmount;
+    fund.maturity_value = actualAmount;
+    await savePortfolio(portfolio);
+
+    const interest = actualAmount - fund.principal;
+    const days = fund.start_date
+      ? Math.floor((new Date(breakDate) - new Date(fund.start_date)) / (1000 * 60 * 60 * 24))
+      : 0;
+    const effectivePct = fund.principal ? (interest / fund.principal) * 100 : 0;
+
+    return {
+      principal: Math.round(fund.principal * 100) / 100,
+      actual_amount: Math.round(actualAmount * 100) / 100,
+      interest_earned: Math.round(interest * 100) / 100,
+      effective_pct: Math.round(effectivePct * 10000) / 10000,
+      days_held: days,
     };
   },
 };
